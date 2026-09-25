@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ورود به آزمون | کیتایار</title>
+    <style>
+        /* استایل‌های قبلی را نگه دارید */
+        :root { --primary: #2563eb; --primary-hover: #1d4ed8; --bg: #f8fafc; --surface: #ffffff; --text: #1e293b; --text-light: #64748b; --border: #e2e8f0; }
+        body { font-family: system-ui, -apple-system, Tahoma, Arial, sans-serif; background-color: var(--bg); color: var(--text); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .card { background: var(--surface); padding: 2.5rem 2rem; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); width: 100%; max-width: 400px; }
+        .header { text-align: center; margin-bottom: 2rem; }
+        .header h1 { font-size: 1.5rem; color: var(--primary); margin: 0 0 0.5rem 0; }
+        .header p { color: var(--text-light); font-size: 0.9rem; margin: 0; }
+        .form-group { margin-bottom: 1.2rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; font-size: 0.9rem; font-weight: 600; }
+        .form-group input { width: 100%; padding: 0.8rem; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem; box-sizing: border-box; font-family: inherit; }
+        .form-group input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+        .btn { width: 100%; padding: 1rem; background-color: var(--primary); color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; transition: 0.2s; margin-top: 1rem; }
+        .btn:hover { background-color: var(--primary-hover); }
+        .btn:disabled { background-color: var(--text-light); cursor: not-allowed; }
+        .error-message { color: #ef4444; background: #fef2f2; padding: 0.8rem; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; display: none; }
+        
+        /* کلاس‌های کمکی برای مخفی کردن فرم‌ها */
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <div class="header">
+            <h1>ورود به جلسه آزمون</h1>
+            <p id="subtext">برای شروع، شماره موبایل خود را وارد کنید</p>
+        </div>
+
+        <div id="errorBox" class="error-message"></div>
+
+        <!-- مرحله اول: دریافت شماره موبایل -->
+        <form id="step1Form">
+            <div class="form-group">
+                <label for="phoneNumber">شماره موبایل</label>
+                <input type="tel" id="phoneNumber" placeholder="09..." maxlength="11" required dir="ltr" style="text-align: left;">
+            </div>
+            <button type="submit" id="btnStep1" class="btn">دریافت کد تایید</button>
+        </form>
+
+        <!-- مرحله دوم: دریافت کد و نام -->
+        <form id="step2Form" class="hidden">
+            <!-- این بخش فقط برای کاربران جدید نمایش داده می‌شود -->
+            <div class="form-group hidden" id="nameContainer">
+                <label for="fullName">نام و نام خانوادگی</label>
+                <input type="text" id="fullName" placeholder="مثال: محمد احمدی">
+            </div>
+
+            <div class="form-group">
+                <label for="otpCode">کد تایید (12345)</label>
+                <input type="text" id="otpCode" placeholder="کد ۵ رقمی" maxlength="5" required dir="ltr" style="text-align: center; letter-spacing: 5px; font-size: 1.2rem;">
+            </div>
+            
+            <button type="submit" id="btnStep2" class="btn">تایید و ورود</button>
+            
+            <div style="text-align: center; margin-top: 15px;">
+                <a href="#" onclick="location.reload()" style="font-size: 0.85rem; color: var(--text-light); text-decoration: none;">تغییر شماره موبایل</a>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        const examId = window.location.pathname.split('/').pop();
+        let isNewUserGlobal = false;
+        let phoneNumberGlobal = '';
+
+        // مدیریت ارسال مرحله اول (شماره)
+        document.getElementById('step1Form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btnStep1');
+            const errorBox = document.getElementById('errorBox');
+            phoneNumberGlobal = document.getElementById('phoneNumber').value;
+
+            btn.disabled = true;
+            btn.innerText = 'چند لحظه صبر کنید...';
+            errorBox.style.display = 'none';
+
+            try {
+                const response = await fetch(`/api/student/auth/join/${examId}/request`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phoneNumber: phoneNumberGlobal })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    isNewUserGlobal = data.data.isNewUser;
+                    
+                    // تغییر ظاهر فرم به مرحله دوم
+                    document.getElementById('step1Form').classList.add('hidden');
+                    document.getElementById('step2Form').classList.remove('hidden');
+                    document.getElementById('subtext').innerText = 'کد تایید ارسال شده را وارد کنید';
+
+                    // اگر کاربر جدید بود، فیلد نام را هم نشان بده
+                    if (isNewUserGlobal) {
+                        document.getElementById('nameContainer').classList.remove('hidden');
+                        document.getElementById('fullName').required = true;
+                    }
+                    
+                    document.getElementById('otpCode').focus();
+                } else {
+                    showError(data.message);
+                    btn.disabled = false;
+                    btn.innerText = 'دریافت کد تایید';
+                }
+            } catch (error) {
+                showError('خطا در ارتباط با سرور.');
+                btn.disabled = false;
+                btn.innerText = 'دریافت کد تایید';
+            }
+        });
+
+        // مدیریت ارسال مرحله دوم (کد و نام)
+        document.getElementById('step2Form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btnStep2');
+            const errorBox = document.getElementById('errorBox');
+            
+            const otp = document.getElementById('otpCode').value;
+            const fullName = document.getElementById('fullName').value;
+
+            btn.disabled = true;
+            btn.innerText = 'در حال بررسی...';
+            errorBox.style.display = 'none';
+
+            try {
+                const response = await fetch(`/api/student/auth/join/${examId}/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        phoneNumber: phoneNumberGlobal,
+                        otp: otp,
+                        fullName: isNewUserGlobal ? fullName : undefined
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    localStorage.setItem('studentToken', data.data.token);
+                    btn.innerText = 'ورود موفق...';
+                    window.location.href = `/student/exam/start/${examId}`; 
+                } else {
+                    showError(data.message);
+                    btn.disabled = false;
+                    btn.innerText = 'تایید و ورود';
+                }
+            } catch (error) {
+                showError('خطا در ارتباط با سرور.');
+                btn.disabled = false;
+                btn.innerText = 'تایید و ورود';
+            }
+        });
+
+        function showError(message) {
+            const errorBox = document.getElementById('errorBox');
+            errorBox.innerText = message;
+            errorBox.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

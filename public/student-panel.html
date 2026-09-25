@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <title>پنل شبیه‌ساز دانش‌آموز (محمد طاهری)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700&display=swap');
+    body { font-family: 'Vazirmatn', sans-serif; background-color: #f3f4f6; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body class="p-6">
+
+  <!-- Header -->
+  <header class="bg-white shadow rounded-lg p-4 mb-6 flex justify-between items-center">
+    <div>
+      <h1 class="text-xl font-bold text-gray-800">شبیه‌ساز اپلیکیشن دانش‌آموز</h1>
+      <p id="user-info" class="text-sm text-gray-500">در حال ورود...</p>
+    </div>
+    <button onclick="loadDashboard()" class="bg-blue-500 text-white px-4 py-2 rounded">رفرش داشبورد</button>
+  </header>
+
+  <!-- Dashboard Section -->
+  <section id="dashboard" class="bg-white p-6 rounded-lg shadow">
+    <h2 class="text-lg font-bold mb-4 border-b pb-2">لیست آزمون‌های من</h2>
+    <div id="exams-list" class="space-y-4">
+      <p class="text-gray-500">در حال دریافت اطلاعات...</p>
+    </div>
+  </section>
+
+  <!-- Active Exam Section -->
+  <section id="exam-view" class="hidden bg-white p-6 rounded-lg shadow border-t-4 border-blue-500">
+    <div class="flex justify-between items-center mb-4">
+      <h2 id="exam-title" class="text-xl font-bold">در حال آزمون...</h2>
+      <button onclick="finishExam()" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">پایان آزمون</button>
+    </div>
+    <div id="question-container" class="mb-6 p-4 bg-gray-50 rounded">
+      <!-- سوال اینجا رندر می‌شود -->
+    </div>
+  </section>
+
+  <!-- Report Card Section -->
+  <section id="report-view" class="hidden bg-white p-6 rounded-lg shadow border-t-4 border-green-500">
+    <div class="flex justify-between items-center mb-4 border-b pb-2">
+      <h2 class="text-xl font-bold">کارنامه آزمون</h2>
+      <button onclick="showDashboard()" class="bg-gray-200 text-gray-700 px-4 py-2 rounded">بازگشت</button>
+    </div>
+    <div id="report-header" class="mb-4 flex gap-4 font-bold text-lg"></div>
+    <div id="report-details" class="space-y-4"></div>
+  </section>
+
+  <script>
+    // تنظیمات سراسری
+    const API_BASE = '/api/student';
+    let token = '';
+    let currentExamId = '';
+    let currentQuestions = [];
+    let savedAnswers = []; // پاسخ‌هایی که از نشست برگشته
+
+    // 1. لاگین خودکار محمد طاهری
+    async function autoLogin() {
+      try {
+        const res = await fetch(`${API_BASE}/auth/verify-otp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber: '09137780061', otp: '12345', fullName: 'محمد طاهری' })
+        });
+        const data = await res.json();
+        if (data.success) {
+          token = data.data.token;
+          document.getElementById('user-info').innerText = `کاربر: ${data.data.fullName} | شماره: 09137780061`;
+          loadDashboard();
+        } else {
+          alert('خطا در لاگین خودکار');
+        }
+      } catch (err) {
+        console.error(err);
+        document.getElementById('user-info').innerText = 'خطا در اتصال به سرور';
+      }
+    }
+
+    // 2. دریافت لیست آزمون‌ها
+    async function loadDashboard() {
+      showDashboard();
+      const listDiv = document.getElementById('exams-list');
+      listDiv.innerHTML = 'در حال بارگذاری...';
+      
+      const res = await fetch(`${API_BASE}/exams`, { headers: { 'Authorization': `Bearer ${token}` } });
+      const data = await res.json();
+      
+      if (data.success && data.data.length > 0) {
+        listDiv.innerHTML = data.data.map(exam => `
+          <div class="border p-4 rounded flex justify-between items-center ${exam.status === 'آماده شروع' ? 'border-green-400 bg-green-50' : ''}">
+            <div>
+              <h3 class="font-bold text-lg">${exam.title}</h3>
+              <p class="text-sm text-gray-600">وضعیت: <span class="font-bold text-blue-600">${exam.status}</span> | نمره کل: ${exam.totalScore}</p>
+            </div>
+            <div>
+              ${(exam.status === 'آماده شروع' || exam.status === 'در حال برگزاری') 
+                ? `<button onclick="startExam('${exam.id}')" class="bg-green-500 text-white px-4 py-2 rounded">ورود به آزمون</button>` 
+                : ''}
+              ${exam.status === 'تصحیح شده' 
+                ? `<button onclick="viewReport('${exam.id}')" class="bg-purple-500 text-white px-4 py-2 rounded">مشاهده کارنامه (${exam.earnedScore})</button>` 
+                : ''}
+            </div>
+          </div>
+        `).join('');
+      } else {
+        listDiv.innerHTML = '<p>هیچ آزمونی برای شما یافت نشد. (معلم باید شماره 09137780061 را در کلاسی قرار داده و آزمون بسازد)</p>';
+      }
+    }
+
+    // 3. شروع آزمون و دریافت سوالات
+    async function startExam(examId) {
+      currentExamId = examId;
+      // ایجاد/ادامه نشست
+      const enterRes = await fetch(`${API_BASE}/exams/${examId}/enter`, { 
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}` } 
+      });
+      const enterData = await enterRes.json();
+      if (!enterData.success) return alert(enterData.message);
+      
+      savedAnswers = enterData.data.answers || [];
+
+      // دریافت متن سوالات
+      const qRes = await fetch(`${API_BASE}/exams/${examId}/questions`, { 
+        headers: { 'Authorization': `Bearer ${token}` } 
+      });
+      const qData = await qRes.json();
+      currentQuestions = qData.data;
+
+      renderExamUI();
+    }
+
+    // 4. نمایش رابط کاربری آزمون
+    function renderExamUI() {
+      document.getElementById('dashboard').classList.add('hidden');
+      document.getElementById('report-view').classList.add('hidden');
+      document.getElementById('exam-view').classList.remove('hidden');
+
+      const container = document.getElementById('question-container');
+      container.innerHTML = currentQuestions.map((q, index) => {
+        // پیدا کردن جواب قبلی (اگر نشست ادامه پیدا کرده)
+        const previousAnswer = savedAnswers.find(a => a.question === q._id)?.submittedAnswer || '';
+
+        return `
+          <div class="mb-6 p-4 border rounded bg-white">
+            <h4 class="font-bold mb-2">${index + 1}. ${q.question}</h4>
+            <div class="space-y-2">
+              ${q.options ? q.options.map(opt => `
+                <label class="block p-2 border rounded cursor-pointer hover:bg-gray-50">
+                  <input type="radio" name="q_${q._id}" value="${opt}" 
+                    onchange="submitAnswer('${q._id}', this.value)"
+                    ${previousAnswer === opt ? 'checked' : ''}>
+                  ${opt}
+                </label>
+              `).join('') : `<textarea placeholder="پاسخ تشریحی خود را اینجا بنویسید..." 
+                              onblur="submitAnswer('${q._id}', this.value)" 
+                              class="w-full border p-2 rounded">${previousAnswer}</textarea>`}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 5. ارسال لحظه‌ای پاسخ
+    async function submitAnswer(questionId, answerValue) {
+      await fetch(`${API_BASE}/exams/${currentExamId}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ questionId, submittedAnswer: answerValue, currentQuestionIndex: 0 })
+      });
+      console.log('Saved:', answerValue);
+    }
+
+    // 6. پایان آزمون
+    async function finishExam() {
+      if(!confirm('آیا از پایان آزمون مطمئن هستید؟')) return;
+      const res = await fetch(`${API_BASE}/exams/${currentExamId}/finish`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      alert(data.message);
+      loadDashboard();
+    }
+
+    // 7. مشاهده کارنامه
+    async function viewReport(examId) {
+      const res = await fetch(`${API_BASE}/exams/${examId}/report`, { headers: { 'Authorization': `Bearer ${token}` } });
+      const data = await res.json();
+      
+      if (!data.success) return alert(data.message);
+
+      document.getElementById('dashboard').classList.add('hidden');
+      document.getElementById('exam-view').classList.add('hidden');
+      document.getElementById('report-view').classList.remove('hidden');
+
+      const header = data.data.header;
+      document.getElementById('report-header').innerHTML = `
+        <span class="text-blue-600">نمره شما: ${header.earnedScore} از ${header.totalScore}</span>
+      `;
+
+      document.getElementById('report-details').innerHTML = data.data.details.map(ans => `
+        <div class="p-4 border rounded ${ans.isCorrect ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}">
+          <p class="font-bold mb-2">${ans.questionText}</p>
+          <p class="text-sm">پاسخ شما: <span class="font-bold">${ans.submittedAnswer || 'خالی'}</span></p>
+          <p class="text-sm">پاسخ صحیح: <span class="font-bold text-green-700">${ans.correctAnswer}</span></p>
+        </div>
+      `).join('');
+    }
+
+    function showDashboard() {
+      document.getElementById('dashboard').classList.remove('hidden');
+      document.getElementById('exam-view').classList.add('hidden');
+      document.getElementById('report-view').classList.add('hidden');
+    }
+
+    // اجرای خودکار در زمان لود صفحه
+    window.onload = autoLogin;
+  </script>
+</body>
+</html>

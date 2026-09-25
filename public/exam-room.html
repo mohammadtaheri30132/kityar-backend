@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>محیط آزمون | کیتایار</title>
+    <style>
+        /* استایل‌های پایه */
+        :root { --primary: #2563eb; --primary-hover: #1d4ed8; --bg: #f8fafc; --surface: #ffffff; --text: #1e293b; --text-light: #64748b; --border: #e2e8f0; --success: #16a34a; --danger: #dc2626; }
+        body { font-family: system-ui, -apple-system, Tahoma, Arial, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; justify-content: center; min-height: 100vh; }
+        .container { width: 100%; max-width: 700px; display: flex; flex-direction: column; gap: 20px; }
+        
+        /* کارت‌ها */
+        .card { background: var(--surface); padding: 2rem; border-radius: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        .header-card { display: flex; justify-content: space-between; align-items: center; padding: 1.5rem; }
+        
+        /* متون و دکمه‌ها */
+        .title { margin: 0; font-size: 1.3rem; color: var(--primary); }
+        .text-center { text-align: center; }
+        .info-text { font-size: 1.1rem; color: var(--text-light); margin: 15px 0; line-height: 1.8; }
+        .btn { padding: 12px 24px; border: none; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; transition: 0.2s; width: 100%; margin-top: 15px; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+        .btn-success { background: var(--success); color: white; }
+        
+        /* ارور و پیام‌ها */
+        .alert { padding: 15px; border-radius: 8px; margin-bottom: 20px; display: none; text-align: center; font-weight: bold; }
+        .alert-error { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
+        
+        /* عناصر آزمون */
+        .timer-box { background: #fef2f2; color: var(--danger); padding: 8px 16px; border-radius: 8px; font-weight: bold; border: 1px solid #fecaca; }
+        .q-meta { display: flex; justify-content: space-between; margin-bottom: 1.5rem; color: var(--text-light); border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        .q-text { font-size: 1.2rem; line-height: 1.8; margin-bottom: 2rem; font-weight: 500; }
+        .option-item { display: flex; align-items: center; padding: 1rem; border: 2px solid var(--border); border-radius: 10px; margin-bottom: 10px; cursor: pointer; }
+        .option-item.selected { border-color: var(--primary); background: #eff6ff; }
+        .essay-textarea { width: 100%; height: 150px; padding: 1rem; border: 2px solid var(--border); border-radius: 10px; font-family: inherit; font-size: 1rem; resize: vertical; box-sizing: border-box; }
+        .flex-between { display: flex; justify-content: space-between; }
+        .hidden { display: none !important; }
+        
+        #loadingScreen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg); display: flex; justify-content: center; align-items: center; z-index: 1000; font-size: 1.2rem; color: var(--primary); font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="loadingScreen">در حال برقراری ارتباط...</div>
+
+    <!-- اتاق انتظار (Lobby) -->
+    <div class="container hidden" id="lobbyScreen">
+        <div class="card text-center">
+            <h1 class="title" id="lobbyTitle" style="font-size: 1.8rem; margin-bottom: 10px;">...</h1>
+            
+            <div style="background: #f1f5f9; padding: 20px; border-radius: 12px; margin: 20px 0;">
+                <p id="lobbyTimeInfo" class="info-text">در حال بررسی زمان آزمون...</p>
+            </div>
+
+            <div id="lobbyAlert" class="alert alert-error"></div>
+
+            <button class="btn btn-primary" id="btnStart" onclick="startActualExam()">شروع آزمون</button>
+        </div>
+    </div>
+
+    <!-- محیط اصلی آزمون -->
+    <div class="container hidden" id="examScreen">
+        <div class="card header-card">
+            <h2 class="title" id="examTitle">...</h2>
+            <div class="timer-box" id="timerDisplay">--:--</div>
+        </div>
+
+        <div class="card">
+            <div class="q-meta">
+                <span id="questionCounter">سوال ۱</span>
+                <span id="questionTypeBadge">تستی</span>
+            </div>
+            <div class="q-text" id="questionText">...</div>
+            <div id="answerArea"></div>
+        </div>
+
+        <div class="card flex-between">
+            <button class="btn" style="background: transparent; border: 2px solid var(--border); width: auto;" id="prevBtn" onclick="navigate(-1)">قبلی</button>
+            <button class="btn btn-success hidden" style="width: auto;" id="finishBtn" onclick="submitExam()">ثبت نهایی و پایان</button>
+            <button class="btn btn-primary" style="width: auto;" id="nextBtn" onclick="navigate(1)">بعدی</button>
+        </div>
+    </div>
+
+    <script>
+        const token = localStorage.getItem('studentToken');
+        const examId = window.location.pathname.split('/').pop();
+        
+        let questions = [];
+        let currentIdx = 0;
+        let studentAnswers = {};
+        let timerInterval;
+
+        window.onload = async () => {
+            if (!token) {
+                window.location.href = `/exam/join/${examId}`;
+                return;
+            }
+            await loadLobbyInfo();
+        };
+
+        // ۱. تبدیل تاریخ میلادی به شمسی خوانا
+        function formatToShamsi(isoDate) {
+            if(!isoDate) return 'نامشخص';
+            const date = new Date(isoDate);
+            return new Intl.DateTimeFormat('fa-IR', { 
+                year: 'numeric', month: 'long', day: 'numeric', 
+                hour: '2-digit', minute: '2-digit' 
+            }).format(date);
+        }
+
+        // ۲. بارگذاری اتاق انتظار
+        async function loadLobbyInfo() {
+            try {
+                const res = await fetch(`/api/student/exams/${examId}/info`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                
+                document.getElementById('loadingScreen').classList.add('hidden');
+                document.getElementById('lobbyScreen').classList.remove('hidden');
+
+                if (data.success) {
+                    document.getElementById('lobbyTitle').innerText = data.data.title;
+                    document.getElementById('examTitle').innerText = data.data.title;
+
+                    const timeInfoBox = document.getElementById('lobbyTimeInfo');
+                    
+                    if (data.data.isUntimed) {
+                        timeInfoBox.innerHTML = `<strong>وضعیت زمان:</strong><br><span style="color: var(--success);">بدون محدودیت زمانی (آزاد)</span>`;
+                    } else {
+                        timeInfoBox.innerHTML = `
+                            <strong>زمان شروع:</strong> ${formatToShamsi(data.data.startTime)}<br><br>
+                            <strong>زمان پایان:</strong> ${formatToShamsi(data.data.endTime)}
+                        `;
+                    }
+                } else {
+                    showAlert(data.message || 'خطا در دریافت اطلاعات');
+                }
+            } catch (err) {
+                showAlert('خطا در ارتباط با سرور');
+            }
+        }
+
+        // ۳. شروع واقعی آزمون
+        async function startActualExam() {
+            const btn = document.getElementById('btnStart');
+            btn.disabled = true;
+            btn.innerText = 'در حال پردازش...';
+            hideAlert();
+
+            try {
+                const response = await fetch(`/api/student/exams/${examId}/start`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    questions = data.data.questions;
+                    
+                    document.getElementById('lobbyScreen').classList.add('hidden');
+                    document.getElementById('examScreen').classList.remove('hidden');
+                    
+                    if(data.data.endTime && !data.data.isUntimed) {
+                        startTimer(new Date(data.data.endTime));
+                    } else {
+                        document.getElementById('timerDisplay').innerText = 'بدون محدودیت';
+                    }
+                    
+                    renderQuestion();
+                } else {
+                    showAlert(data.message);
+                    btn.disabled = false;
+                    btn.innerText = 'شروع آزمون';
+                }
+            } catch (error) {
+                showAlert('خطا در ارتباط با سرور');
+                btn.disabled = false;
+                btn.innerText = 'شروع آزمون';
+            }
+        }
+
+        function showAlert(msg) {
+            const alertBox = document.getElementById('lobbyAlert');
+            alertBox.innerText = msg;
+            alertBox.style.display = 'block';
+        }
+        function hideAlert() {
+            document.getElementById('lobbyAlert').style.display = 'none';
+        }
+
+        // (توابع مربوط به رندر سوالات، ذخیره پاسخ و ارسال نهایی بدون تغییر نسبت به قبل در اینجا قرار می‌گیرند)
+        function renderQuestion() {
+            const q = questions[currentIdx];
+            if (!q) return;
+            document.getElementById('questionCounter').innerText = `سوال ${currentIdx + 1} از ${questions.length}`;
+            document.getElementById('questionTypeBadge').innerText = q.type === 'تشریحی' ? '📝 تشریحی' : '☑️ تستی';
+            document.getElementById('questionText').innerText = q.question;
+            
+            const answerArea = document.getElementById('answerArea');
+            answerArea.innerHTML = '';
+            const savedAnswer = studentAnswers[q._id] || '';
+
+            if (q.type === 'تشریحی') {
+                const textarea = document.createElement('textarea');
+                textarea.className = 'essay-textarea';
+                textarea.value = savedAnswer;
+                textarea.oninput = (e) => studentAnswers[q._id] = e.target.value;
+                answerArea.appendChild(textarea);
+            } else {
+                const options = q.options || ['گزینه ۱', 'گزینه ۲', 'گزینه ۳', 'گزینه ۴']; 
+                options.forEach((optText) => {
+                    const div = document.createElement('div');
+                    div.className = `option-item ${savedAnswer === optText ? 'selected' : ''}`;
+                    div.innerHTML = `<input type="radio" style="margin-left: 10px;" ${savedAnswer === optText ? 'checked' : ''}> <span>${optText}</span>`;
+                    div.onclick = () => {
+                        answerArea.querySelectorAll('.option-item').forEach(el => el.classList.remove('selected'));
+                        div.classList.add('selected');
+                        div.querySelector('input').checked = true;
+                        studentAnswers[q._id] = optText;
+                    };
+                    answerArea.appendChild(div);
+                });
+            }
+            updateNavigation();
+        }
+
+        function navigate(step) {
+            currentIdx += step;
+            renderQuestion();
+        }
+
+        function updateNavigation() {
+            document.getElementById('prevBtn').disabled = currentIdx === 0;
+            const isLast = currentIdx === questions.length - 1;
+            if(isLast){
+                document.getElementById('nextBtn').classList.add('hidden');
+                document.getElementById('finishBtn').classList.remove('hidden');
+            } else {
+                document.getElementById('nextBtn').classList.remove('hidden');
+                document.getElementById('finishBtn').classList.add('hidden');
+            }
+        }
+
+        function startTimer(endTime) {
+            timerInterval = setInterval(() => {
+                const distance = endTime.getTime() - new Date().getTime();
+                if (distance <= 0) {
+                    clearInterval(timerInterval);
+                    document.getElementById('timerDisplay').innerText = "پایان وقت!";
+                    submitExam(true);
+                    return;
+                }
+                const m = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                const s = Math.floor((distance % (1000 * 60)) / 1000);
+                document.getElementById('timerDisplay').innerText = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+            }, 1000);
+        }
+
+        async function submitExam(isForce = false) {
+            if (!isForce && !confirm('آیا از ثبت نهایی پاسخ‌ها مطمئن هستید؟')) return;
+            clearInterval(timerInterval);
+            document.getElementById('examScreen').classList.add('hidden');
+            document.getElementById('loadingScreen').innerText = 'در حال ثبت نتایج...';
+            document.getElementById('loadingScreen').classList.remove('hidden');
+
+            const formattedAnswers = Object.keys(studentAnswers).map(qId => ({ questionId: qId, answer: studentAnswers[qId] }));
+
+            try {
+                const res = await fetch(`/api/student/exams/${examId}/submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ answers: formattedAnswers })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('آزمون شما با موفقیت ثبت شد!');
+                    // در آینده به داشبورد هدایت می‌شود
+                } else {
+                    alert(data.message);
+                    document.getElementById('loadingScreen').classList.add('hidden');
+                    document.getElementById('examScreen').classList.remove('hidden');
+                }
+            } catch (e) {
+                alert('خطا در ثبت آزمون');
+            }
+        }
+    </script>
+</body>
+</html>
