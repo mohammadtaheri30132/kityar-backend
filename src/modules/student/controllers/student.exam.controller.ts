@@ -1,5 +1,6 @@
 import { Request, Response } from 'express'
 import { Exam } from '../../../core/models/Exam.js'
+import { Question } from '../../../core/models/Question.js'
 import { ExamSession } from '../../../core/models/ExamSession.js'
 import { logger } from '../../../core/utils/logger.js'
 import { StudentProfile } from '../../../core/models/StudentProfile.js'
@@ -130,9 +131,15 @@ export const enterExam = async (req: Request, res: Response): Promise<void> => {
     }
 
     // ۴. ایجاد نشست جدید برای اولین ورود
+    const currentUser = (req as any).user;
+    
     const newSession = new ExamSession({
       exam: examId,
       participantIdentifier: identifier,
+      user: currentUser?._id,
+      firstNameSnapshot: currentUser?.firstName,
+      lastNameSnapshot: currentUser?.lastName,
+      fatherNameSnapshot: currentUser?.fatherName,
       status: 'in-progress',
       startTime: now,
       answers: [],
@@ -401,7 +408,7 @@ export const getExamQuestions = async (req: Request, res: Response): Promise<voi
     // دریافت سوالات و حذف فیلد answer تا در شبکه (Network) قابل تقلب نباشد
     const exam = await Exam.findById(examId).populate({
       path: 'questions',
-      select: 'question type options difficulty has_image source_image' // دقت کنید فیلد answer را نیاوردیم
+      select: 'question type options difficulty has_image source_image audioUrl has_audio' // دقت کنید فیلد answer را نیاوردیم
     })
 
     res.status(200).json({ success: true, data: exam?.questions || [] })
@@ -487,6 +494,10 @@ const participantsList = exam.allowedParticipants || [];
       session = new ExamSession({
         exam: examId,
         participantIdentifier: phoneStr, // 👈 اینجا اصلاح شد
+        user: user._id,
+        firstNameSnapshot: user.firstName,
+        lastNameSnapshot: user.lastName,
+        fatherNameSnapshot: user.fatherName,
         startTime: new Date(),
         status: 'in-progress',
         answers: []
@@ -502,7 +513,8 @@ const participantsList = exam.allowedParticipants || [];
         isUntimed: exam.isUntimed,
         endTime: exam.endTime,
         sessionId: session._id,
-        questions: exam.questions
+        questions: exam.questions,
+        savedAnswers: session.answers
       }
     });
 
@@ -544,15 +556,14 @@ export const submitExam = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    // 💡 حل مشکل: تغییر نام questionId به question برای همخوانی با دیتابیس
     const mappedAnswers = (answers || []).map((item: any) => ({
-      question: item.questionId, // جاگذاری شناسه سوال در فیلد صحیح
-      answer: String(item.answer || '').trim() 
+      question: item.questionId,
+      submittedAnswer: typeof item.answer === 'object' ? item.answer : String(item.answer || '').trim() 
     }));
 
     // ذخیره پاسخ‌های اصلاح‌شده
     session.answers = mappedAnswers;
-    session.endTime = new Date();
+    session.finishTime = new Date();
     session.status = 'finished';
     
     await session.save();

@@ -48,8 +48,16 @@
         <form id="step2Form" class="hidden">
             <!-- این بخش فقط برای کاربران جدید نمایش داده می‌شود -->
             <div class="form-group hidden" id="nameContainer">
-                <label for="fullName">نام و نام خانوادگی</label>
-                <input type="text" id="fullName" placeholder="مثال: محمد احمدی">
+                <label for="firstName">نام</label>
+                <input type="text" id="firstName" placeholder="مثال: محمد">
+            </div>
+            <div class="form-group hidden" id="lastNameContainer">
+                <label for="lastName">نام خانوادگی</label>
+                <input type="text" id="lastName" placeholder="مثال: احمدی">
+            </div>
+            <div class="form-group hidden" id="fatherNameContainer">
+                <label for="fatherName">نام پدر</label>
+                <input type="text" id="fatherName" placeholder="مثال: علی">
             </div>
 
             <div class="form-group">
@@ -101,7 +109,10 @@
                     // اگر کاربر جدید بود، فیلد نام را هم نشان بده
                     if (isNewUserGlobal) {
                         document.getElementById('nameContainer').classList.remove('hidden');
-                        document.getElementById('fullName').required = true;
+                        document.getElementById('lastNameContainer').classList.remove('hidden');
+                        document.getElementById('fatherNameContainer').classList.remove('hidden');
+                        document.getElementById('firstName').required = true;
+                        document.getElementById('lastName').required = true;
                     }
                     
                     document.getElementById('otpCode').focus();
@@ -124,7 +135,9 @@
             const errorBox = document.getElementById('errorBox');
             
             const otp = document.getElementById('otpCode').value;
-            const fullName = document.getElementById('fullName').value;
+            const firstName = document.getElementById('firstName') ? document.getElementById('firstName').value : undefined;
+            const lastName = document.getElementById('lastName') ? document.getElementById('lastName').value : undefined;
+            const fatherName = document.getElementById('fatherName') ? document.getElementById('fatherName').value : undefined;
 
             btn.disabled = true;
             btn.innerText = 'در حال بررسی...';
@@ -137,7 +150,9 @@
                     body: JSON.stringify({ 
                         phoneNumber: phoneNumberGlobal,
                         otp: otp,
-                        fullName: isNewUserGlobal ? fullName : undefined
+                        firstName: isNewUserGlobal ? firstName : undefined,
+                        lastName: isNewUserGlobal ? lastName : undefined,
+                        fatherName: isNewUserGlobal ? fatherName : undefined
                     })
                 });
 

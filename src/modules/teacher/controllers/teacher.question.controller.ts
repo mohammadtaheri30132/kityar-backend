@@ -25,7 +25,7 @@ export const getQuestionsForExam = async (req: Request, res: Response): Promise<
     if (difficulty) filter.difficulty = difficulty
 
     const questions = await Question.find(filter)
-      .select('question_id type difficulty question options answer has_image source_image tags lesson_id') // فقط فیلدهای مورد نیاز اپلیکیشن ارسال شود
+      .select('question_id type difficulty question options answer has_image source_image audioUrl has_audio tags lesson_id') // فقط فیلدهای مورد نیاز اپلیکیشن ارسال شود
       .sort({ createdAt: -1 })
 
     res.status(200).json({

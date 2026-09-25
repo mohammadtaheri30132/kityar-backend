@@ -3,9 +3,13 @@ import bcrypt from 'bcryptjs'
 
 export interface IUser extends Document {
   username: string
+  phoneNumber?: string
   password: string
   fullName: string
-  role: 'admin' | 'teacher'
+  firstName?: string
+  lastName?: string
+  fatherName?: string
+  role: 'admin' | 'teacher' | 'student'
   isActive: boolean
   lastLogin: Date | null
   comparePassword(candidatePassword: string): Promise<boolean>
@@ -20,6 +24,11 @@ const userSchema = new Schema<IUser>(
       trim: true,
       lowercase: true,
     },
+    phoneNumber: {
+      type: String,
+      unique: true,
+      sparse: true
+    },
     password: {
       type: String,
       required: [true, 'رمز عبور الزامی است'],
@@ -31,6 +40,9 @@ const userSchema = new Schema<IUser>(
       required: [true, 'نام کامل الزامی است'],
       trim: true,
     },
+    firstName: { type: String, trim: true },
+    lastName: { type: String, trim: true },
+    fatherName: { type: String, trim: true },
     role: {
       type: String,
       enum: ['admin', 'teacher','student'],

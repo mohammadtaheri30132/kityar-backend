@@ -37,6 +37,11 @@
         .flex-between { display: flex; justify-content: space-between; }
         .hidden { display: none !important; }
         
+        .q-media { max-width: 100%; border-radius: 8px; margin-bottom: 1rem; }
+        .upload-btn { background: #f1f5f9; border: 1px dashed var(--primary); padding: 10px; border-radius: 8px; text-align: center; cursor: pointer; color: var(--primary); font-weight: bold; margin-bottom: 10px; display: block; }
+        .upload-preview { max-width: 100px; max-height: 100px; border-radius: 8px; margin-top: 10px; }
+        .upload-audio { width: 100%; margin-top: 10px; }
+
         #loadingScreen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg); display: flex; justify-content: center; align-items: center; z-index: 1000; font-size: 1.2rem; color: var(--primary); font-weight: bold; }
     </style>
 </head>
@@ -90,6 +95,27 @@
         let currentIdx = 0;
         let studentAnswers = {};
         let timerInterval;
+
+        // بارگذاری از حافظه محلی در صورت رفرش صفحه
+        function loadLocalAnswers() {
+            try {
+                const saved = localStorage.getItem('exam_answers_' + examId);
+                if (saved) {
+                    studentAnswers = JSON.parse(saved);
+                }
+            } catch(e) {}
+        }
+
+        // همگام‌سازی با سرور و حافظه محلی
+        function syncAnswer(qId) {
+            localStorage.setItem('exam_answers_' + examId, JSON.stringify(studentAnswers));
+            
+            fetch(`/api/student/exams/${examId}/answer`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ questionId: qId, submittedAnswer: studentAnswers[qId], currentQuestionIndex: currentIdx })
+            }).catch(e => console.log('sync failed', e));
+        }
 
         window.onload = async () => {
             if (!token) {
@@ -158,6 +184,16 @@
                 if (data.success) {
                     questions = data.data.questions;
                     
+                    if (data.data.savedAnswers && Array.isArray(data.data.savedAnswers)) {
+                        data.data.savedAnswers.forEach(ans => {
+                            if (ans.question && ans.submittedAnswer) {
+                                studentAnswers[ans.question] = ans.submittedAnswer;
+                            }
+                        });
+                    }
+                    
+                    loadLocalAnswers(); // اولویت با دیتای لوکال است در صورت قطعی اینترنت
+                    
                     document.getElementById('lobbyScreen').classList.add('hidden');
                     document.getElementById('examScreen').classList.remove('hidden');
                     
@@ -189,38 +225,116 @@
             document.getElementById('lobbyAlert').style.display = 'none';
         }
 
+        async function handleFileUpload(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            document.getElementById('loadingScreen').innerText = 'در حال آپلود...';
+            document.getElementById('loadingScreen').classList.remove('hidden');
+            
+            try {
+                const res = await fetch('/api/student/exams/upload-media', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: formData
+                });
+                const data = await res.json();
+                document.getElementById('loadingScreen').classList.add('hidden');
+                if (data.success) {
+                    return data.link;
+                } else {
+                    alert('خطا در آپلود: ' + data.message);
+                    return null;
+                }
+            } catch(e) {
+                document.getElementById('loadingScreen').classList.add('hidden');
+                alert('خطا در ارتباط با سرور هنگام آپلود');
+                return null;
+            }
+        }
+
         // (توابع مربوط به رندر سوالات، ذخیره پاسخ و ارسال نهایی بدون تغییر نسبت به قبل در اینجا قرار می‌گیرند)
         function renderQuestion() {
             const q = questions[currentIdx];
             if (!q) return;
             document.getElementById('questionCounter').innerText = `سوال ${currentIdx + 1} از ${questions.length}`;
-            document.getElementById('questionTypeBadge').innerText = q.type === 'تشریحی' ? '📝 تشریحی' : '☑️ تستی';
-            document.getElementById('questionText').innerText = q.question;
+            document.getElementById('questionTypeBadge').innerText = q.type;
+            
+            let qHtml = `<div class="q-text">${q.question}</div>`;
+            if (q.source_image) qHtml += `<img src="${q.source_image}" class="q-media" alt="تصویر سوال" />`;
+            if (q.audioUrl) qHtml += `<audio src="${q.audioUrl}" class="q-media" controls></audio>`;
+            document.getElementById('questionText').innerHTML = qHtml;
             
             const answerArea = document.getElementById('answerArea');
             answerArea.innerHTML = '';
-            const savedAnswer = studentAnswers[q._id] || '';
 
-            if (q.type === 'تشریحی') {
-                const textarea = document.createElement('textarea');
-                textarea.className = 'essay-textarea';
-                textarea.value = savedAnswer;
-                textarea.oninput = (e) => studentAnswers[q._id] = e.target.value;
-                answerArea.appendChild(textarea);
-            } else {
+            if (!studentAnswers[q._id]) {
+                studentAnswers[q._id] = { text: '', media: null, mediaType: null };
+            }
+            const savedAnswer = studentAnswers[q._id];
+
+            if (['تستی', 'صحیح-غلط'].includes(q.type)) {
                 const options = q.options || ['گزینه ۱', 'گزینه ۲', 'گزینه ۳', 'گزینه ۴']; 
                 options.forEach((optText) => {
                     const div = document.createElement('div');
-                    div.className = `option-item ${savedAnswer === optText ? 'selected' : ''}`;
-                    div.innerHTML = `<input type="radio" style="margin-left: 10px;" ${savedAnswer === optText ? 'checked' : ''}> <span>${optText}</span>`;
+                    div.className = `option-item ${savedAnswer.text === optText ? 'selected' : ''}`;
+                    div.innerHTML = `<input type="radio" style="margin-left: 10px;" ${savedAnswer.text === optText ? 'checked' : ''}> <span>${optText}</span>`;
                     div.onclick = () => {
                         answerArea.querySelectorAll('.option-item').forEach(el => el.classList.remove('selected'));
                         div.classList.add('selected');
                         div.querySelector('input').checked = true;
-                        studentAnswers[q._id] = optText;
+                        studentAnswers[q._id].text = optText;
+                        syncAnswer(q._id);
                     };
                     answerArea.appendChild(div);
                 });
+            } else {
+                const textarea = document.createElement('textarea');
+                textarea.className = 'essay-textarea';
+                textarea.value = savedAnswer.text;
+                textarea.placeholder = "پاسخ خود را اینجا بنویسید...";
+                textarea.onchange = (e) => {
+                    studentAnswers[q._id].text = e.target.value;
+                    syncAnswer(q._id);
+                };
+                answerArea.appendChild(textarea);
+
+                const uploadDiv = document.createElement('div');
+                uploadDiv.style.marginTop = '15px';
+                uploadDiv.innerHTML = `
+                    <label class="upload-btn">
+                        📷/🎤 ارسال فایل پاسخ (اختیاری)
+                        <input type="file" style="display:none;" id="fileUpload_${q._id}" accept="image/*,audio/*,video/*" />
+                    </label>
+                    <div id="preview_${q._id}"></div>
+                `;
+                answerArea.appendChild(uploadDiv);
+
+                const fileInput = uploadDiv.querySelector('input');
+                const previewDiv = uploadDiv.querySelector(`#preview_${q._id}`);
+
+                const showPreview = (url, type) => {
+                    if(!url) return;
+                    if(type === 'image') {
+                        previewDiv.innerHTML = `<img src="${url}" class="upload-preview" />`;
+                    } else if(type === 'audio') {
+                        previewDiv.innerHTML = `<audio src="${url}" class="upload-audio" controls></audio>`;
+                    }
+                };
+
+                showPreview(savedAnswer.media, savedAnswer.mediaType);
+
+                fileInput.onchange = async (e) => {
+                    const file = e.target.files[0];
+                    if(!file) return;
+                    const url = await handleFileUpload(file);
+                    if(url) {
+                        const type = file.type.startsWith('image') ? 'image' : 'audio';
+                        studentAnswers[q._id].media = url;
+                        studentAnswers[q._id].mediaType = type;
+                        showPreview(url, type);
+                        syncAnswer(q._id);
+                    }
+                };
             }
             updateNavigation();
         }
@@ -274,6 +388,7 @@
                 });
                 const data = await res.json();
                 if (data.success) {
+                    localStorage.removeItem('exam_answers_' + examId);
                     alert('آزمون شما با موفقیت ثبت شد!');
                     // در آینده به داشبورد هدایت می‌شود
                 } else {

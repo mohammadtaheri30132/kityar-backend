@@ -150,6 +150,7 @@ export const createInitialExam = async (req: Request, res: Response): Promise<vo
     // این کار باعث می‌شود اگر بعداً دانش‌آموزی از کلاس حذف شد، در سوابق این آزمونِ خاص تغییری ایجاد نشود
     const newExam = new Exam({
       teacher: teacher._id,
+      classId: classroom._id,
       title,
       description,
       startTime: start,
@@ -198,32 +199,21 @@ export const getExamDashboard = async (req: Request, res: Response): Promise<voi
     }
 
     // ۳. دریافت تمام نشست‌های (Sessions) مربوط به این آزمون
-    const sessions = await ExamSession.find({ exam: examId })
+    const sessions = await ExamSession.find({ exam: examId }).populate('user', 'firstName lastName fatherName fullName');
 
     // ۴. ترکیب داده‌ها برای ساخت خروجی داشبورد
     const participantsStatusMap = new Map<string, any>()
 
-    // اضافه کردن دانش‌آموزان مجاز که در لیست بوده‌اند
-    exam.allowedParticipants.forEach(participant => {
-      participantsStatusMap.set(participant, {
-        identifier: participant,
-        status: 'شروع نکرده',
-        startTime: null,
-        finishTime: null,
-        score: null,
-        currentQuestionIndex: null,
-        sessionId: null,
-        gradingStatus: 'pending',
-        firstNameSnapshot: '',
-        lastNameSnapshot: ''
-      })
-    })
+    // فقط نشست‌های ایجاد شده (دانش‌آموزانی که وارد آزمون شده‌اند) را نشان می‌دهیم
+    // (بنا به درخواست کاربر، دانش‌آموزانی که هنوز شرکت نکرده‌اند نمایش داده نمی‌شوند)
 
     // به‌روزرسانی با نشست‌های واقعی (چه در لیست مجاز بوده‌اند چه نبوده‌اند)
     sessions.forEach(session => {
       let status = 'در حال آزمون'
       if (session.status === 'finished') status = 'تمام کرده'
       
+      const populatedUser = session.user as any;
+
       participantsStatusMap.set(session.participantIdentifier, {
         identifier: session.participantIdentifier,
         status,
@@ -233,8 +223,9 @@ export const getExamDashboard = async (req: Request, res: Response): Promise<voi
         currentQuestionIndex: session.currentQuestionIndex,
         sessionId: session._id,
         gradingStatus: session.gradingStatus,
-        firstNameSnapshot: session.firstNameSnapshot || '',
-        lastNameSnapshot: session.lastNameSnapshot || ''
+        firstNameSnapshot: session.firstNameSnapshot || populatedUser?.firstName || '',
+        lastNameSnapshot: session.lastNameSnapshot || populatedUser?.lastName || '',
+        fatherNameSnapshot: session.fatherNameSnapshot || populatedUser?.fatherName || ''
       })
     })
 
@@ -403,7 +394,9 @@ export const getTeacherExams = async (req: Request, res: Response): Promise<void
       query.classId = classroomId;
     }
 
-    const exams = await Exam.find(query).sort({ startTime: -1 })
+    const exams = await Exam.find(query)
+      .populate('classId', 'name')
+      .sort({ startTime: -1 })
     const now = new Date()
 
     const examList = exams.map(exam => {
@@ -427,7 +420,8 @@ export const getTeacherExams = async (req: Request, res: Response): Promise<void
         participantsCount: exam.allowedParticipants.length, // تعداد دانش‌آموزانِ مجاز
         questionsCount: exam.questions.length, // تعداد سوالاتِ الصاق شده
         status,
-        classId: exam.classId
+        classId: exam.classId?._id || exam.classId,
+        className: (exam.classId as any)?.name || 'بدون کلاس'
       }
     })
 
@@ -526,14 +520,7 @@ export const deleteExam = async (req: Request, res: Response): Promise<void> => 
       return
     }
 
-    // ۳. گارد امنیتی زمانی
-    if (new Date() >= exam.startTime) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'آزمون در جریان است یا برگزار شده و امکان حذف آن وجود ندارد' 
-      })
-      return
-    }
+    // (برداشتن گارد زمانی جهت اجازه حذف در هر زمان)
 
     // ۴. حذف آزمون از دیتابیس
     await exam.deleteOne()
@@ -857,7 +844,7 @@ export const previewFinalizeExam = async (req: Request, res: Response): Promise<
       return;
     }
 
-    const sessions = await ExamSession.find({ exam: examId, status: 'finished' });
+    const sessions = await ExamSession.find({ exam: examId, status: 'finished' }).populate('user', 'firstName lastName fatherName');
     const memberships = await ClassMembership.find({ classId: exam.classId });
     const classPhones = memberships.map(m => m.studentPhone);
 
@@ -865,10 +852,19 @@ export const previewFinalizeExam = async (req: Request, res: Response): Promise<
     const unmatched = [];
 
     for (const session of sessions) {
-      if (classPhones.includes(session.participantIdentifier) || session.matchingStatus === 'MATCHED') {
-        matched.push(session);
+      // Create a mapped session to ensure names are present
+      const populatedUser = session.user as any;
+      const mappedSession = {
+        ...session.toObject(),
+        firstNameSnapshot: session.firstNameSnapshot || populatedUser?.firstName || '',
+        lastNameSnapshot: session.lastNameSnapshot || populatedUser?.lastName || '',
+        fatherNameSnapshot: session.fatherNameSnapshot || populatedUser?.fatherName || ''
+      };
+
+      if (classPhones.includes(session.participantIdentifier)) {
+        matched.push(mappedSession);
       } else {
-        unmatched.push(session);
+        unmatched.push(mappedSession);
       }
     }
 
@@ -889,8 +885,10 @@ export const finalizeExamGrades = async (req: Request, res: Response): Promise<v
 
     if (actions && Array.isArray(actions)) {
       for (const action of actions) {
-        const session = await ExamSession.findById(action.sessionId);
+        const session = await ExamSession.findById(action.sessionId).populate('user', 'firstName lastName fatherName');
         if (!session) continue;
+        
+        const populatedUser = session.user as any;
 
         if (action.action === 'NEW') {
           // Add to class
@@ -899,6 +897,9 @@ export const finalizeExamGrades = async (req: Request, res: Response): Promise<v
             await ClassMembership.create({
               classId: exam.classId,
               studentPhone: session.participantIdentifier,
+              firstName: session.firstNameSnapshot || populatedUser?.firstName,
+              lastName: session.lastNameSnapshot || populatedUser?.lastName,
+              fatherName: session.fatherNameSnapshot || populatedUser?.fatherName,
               status: 'ACTIVE',
               source: 'EXAM_LINK'
             });

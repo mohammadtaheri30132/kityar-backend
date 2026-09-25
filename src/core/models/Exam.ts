@@ -22,6 +22,7 @@ export interface IExam extends Document {
   randomizeQuestions: boolean // تصادفی کردن سوالات برای هر دانش‌آموز
   deliveryMode: 'all_at_once' | 'one_by_one' // ارسال یکجا یا تکی
   allowBackNavigation: boolean // قابل بازگشت بودن سوال (فقط در حالت تکی کاربرد دارد)
+  questionsCount?: number // تعداد سوالات
 }
 
 const examSchema = new Schema<IExam>(

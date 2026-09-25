@@ -6,6 +6,7 @@ export interface IStudentProfile extends Document {
   studentCode: string // شماره دانش‌آموزی یا کدملی برای ورود
   grade: Types.ObjectId // پایه تحصیلی فعلی
   teachers: Types.ObjectId[] // لیست معلم‌هایی که این دانش‌آموز را به کلاس خود اضافه کرده‌اند
+  invitedBy?: Types.ObjectId // معلمی که این دانش‌آموز را دعوت کرده
 }
 
 const studentProfileSchema = new Schema<IStudentProfile>(
@@ -33,6 +34,10 @@ const studentProfileSchema = new Schema<IStudentProfile>(
         ref: 'TeacherProfile',
       },
     ],
+    invitedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'TeacherProfile',
+    },
   },
   { timestamps: true }
 )

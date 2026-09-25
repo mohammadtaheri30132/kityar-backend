@@ -16,6 +16,7 @@ export interface IExamSession extends Document {
   // برای شرکت‌کنندگان ناشناس یا از طریق لینک
   firstNameSnapshot?: string
   lastNameSnapshot?: string
+  fatherNameSnapshot?: string
   matchingStatus: 'MATCHED' | 'NEEDS_REVIEW'
 
   status: 'in-progress' | 'finished' // وضعیت آزمون
@@ -25,6 +26,7 @@ export interface IExamSession extends Document {
   
   answers: IAnswer[] // لیست پاسخ‌هایی که تا این لحظه داده است
   totalEarnedScore: number // نمره کل کسب شده
+  gradingStatus: 'pending' | 'graded' // وضعیت تصحیح
   
   currentQuestionIndex: number // برای پیگیری اینکه کاربر در حالت "ارسال تکی" در کدام سوال است
 }
@@ -58,10 +60,11 @@ const examSessionSchema = new Schema<IExamSession>(
     },
     firstNameSnapshot: { type: String },
     lastNameSnapshot: { type: String },
+    fatherNameSnapshot: { type: String },
     matchingStatus: {
       type: String,
       enum: ['MATCHED', 'NEEDS_REVIEW'],
-      default: 'MATCHED'
+      default: 'NEEDS_REVIEW'
     },
     status: {
       type: String,

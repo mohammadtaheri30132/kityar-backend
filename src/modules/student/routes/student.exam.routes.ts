@@ -9,6 +9,20 @@ import {
   submitExam,
   getExamInfo // 👈 فقط این مورد به ایمپورت‌ها اضافه شد
 } from '../controllers/student.exam.controller.js'
+import { uploadStudentMedia } from '../controllers/student.upload.controller.js';
+import multer from 'multer';
+
+// تنظیمات ذخیره‌سازی فایل‌ها
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'public/uploads/')
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+    cb(null, uniqueSuffix + '-' + file.originalname)
+  }
+})
+const upload = multer({ storage })
 
 // فرض بر این است که میدلور احراز هویت در هسته مشترک قرار دارد
 import { protect, studentOnly } from '../../../core/middleware/auth.js';
@@ -47,5 +61,8 @@ router.post('/:examId/submit', submitExam);
 // ثبت نهایی و پایان دادن به آزمون توسط دانش‌آموز
 // POST /api/student/exams/:examId/finish
 router.post('/:examId/finish', finishExam)
+
+// آپلود فایل توسط دانش‌آموز (عکس یا ویس)
+router.post('/upload-media', upload.single('file'), uploadStudentMedia);
 
 export default router

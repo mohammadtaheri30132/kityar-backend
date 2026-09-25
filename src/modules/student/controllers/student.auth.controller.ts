@@ -137,7 +137,7 @@ export const requestExamJoinOtp = async (req: Request, res: Response): Promise<v
 export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<void> => {
   try {
     const { examId } = req.params;
-    const { phoneNumber, otp, fullName } = req.body;
+    const { phoneNumber, otp, firstName, lastName, fatherName, fullName } = req.body;
 
     // ۱. بررسی کد تایید
     if (otp !== '12345') {
@@ -156,16 +156,21 @@ export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<vo
       $or: [{ phoneNumber: phoneNumber }, { username: phoneNumber }] 
     });
 
+    const computedFullName = fullName || (firstName && lastName ? `${firstName} ${lastName}` : null);
+
     if (!user) {
       // ساخت کاربر جدید
-      if (!fullName) {
+      if (!computedFullName) {
         res.status(400).json({ success: false, message: 'وارد کردن نام و نام خانوادگی الزامی است.' });
         return;
       }
 
       user = new User({
         phoneNumber,
-        fullName,
+        fullName: computedFullName,
+        firstName,
+        lastName,
+        fatherName,
         username: phoneNumber,
         password: phoneNumber,
         role: 'student'
@@ -174,10 +179,14 @@ export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<vo
     } else {
       // تکمیل اطلاعات در صورت ناقص بودن اکانت قدیمی
       let isUpdated = false;
-      if (!user.fullName && fullName) {
-        user.fullName = fullName;
+      if (!user.fullName && computedFullName) {
+        user.fullName = computedFullName;
         isUpdated = true;
       }
+      if (!user.firstName && firstName) { user.firstName = firstName; isUpdated = true; }
+      if (!user.lastName && lastName) { user.lastName = lastName; isUpdated = true; }
+      if (!user.fatherName && fatherName) { user.fatherName = fatherName; isUpdated = true; }
+
       if (!user.phoneNumber) {
         user.phoneNumber = phoneNumber;
         isUpdated = true;
@@ -218,7 +227,7 @@ export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<vo
     }
 
     // ۵. صدور توکن
-    const token = generateToken(user._id);
+    const token = generateToken(user._id.toString(), phoneNumber);
 
     res.status(200).json({
       success: true,

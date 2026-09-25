@@ -31,6 +31,7 @@ const allowedOrigins = [
   'https://vasehkhoneh.ir',
   'https://www.vasehkhoneh.ir',
   'http://192.168.1.128:5173', // 👈 این IP مک‌بوک شما اضافه شود
+  'http://192.168.1.128:5001',
   process.env.CLIENT_URL || '',
 ].filter(Boolean)
 
