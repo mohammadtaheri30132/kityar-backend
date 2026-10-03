@@ -1,6 +1,9 @@
 import { Request, Response } from 'express'
 import { Classroom } from '../../../core/models/Classroom.js'
 import { ClassMembership } from '../../../core/models/ClassMembership.js'
+import { WeeklySchedule } from '../../../core/models/WeeklySchedule.js'
+import { ClassSession } from '../../../core/models/ClassSession.js'
+import { AttendanceRecord } from '../../../core/models/AttendanceRecord.js'
 import { StudentProfile } from '../../../core/models/StudentProfile.js'
 import { TeacherProfile } from '../../../core/models/TeacherProfile.js'
 import { Exam } from '../../../core/models/Exam.js'
@@ -18,7 +21,7 @@ const getTeacherProfile = async (userId: string) => {
 export const createClassroom = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req as any).user?.id
-    const { name, course, grade, subjectName, gradeName, description } = req.body
+    const { name, course, grade, subjectName, gradeName, description, academicYear, schoolId } = req.body
 
     if (!name) {
       res.status(400).json({ success: false, message: 'نام کلاس الزامی است' })
@@ -33,12 +36,14 @@ export const createClassroom = async (req: Request, res: Response): Promise<void
 
     const newClassroom = new Classroom({
       teacher: teacher._id,
+      school: schoolId || undefined,
       name,
       course: course || undefined,
       grade: grade || undefined,
       subjectName,
       gradeName,
       description,
+      academicYear,
       students: [], 
     })
 
@@ -62,7 +67,7 @@ export const updateClassroom = async (req: Request, res: Response): Promise<void
   try {
     const userId = (req as any).user?.id
     const { classroomId } = req.params
-    const { name, courseId, gradeId, note } = req.body
+    const { name, courseId, gradeId, note, academicYear, schoolId } = req.body
 
     const teacher = await getTeacherProfile(userId)
     if (!teacher) {
@@ -74,10 +79,12 @@ export const updateClassroom = async (req: Request, res: Response): Promise<void
       { _id: classroomId, teacher: teacher._id },
       { 
         $set: {
+          ...(schoolId && { school: schoolId }),
           ...(name && { name }),
           ...(courseId && { course: courseId }),
           ...(gradeId && { grade: gradeId }),
-          ...(note !== undefined && { note })
+          ...(note !== undefined && { note }),
+          ...(academicYear !== undefined && { academicYear })
         }
       },
       { new: true }
@@ -108,8 +115,9 @@ export const getMyClassrooms = async (req: Request, res: Response): Promise<void
       return
     }
 
-    // دریافت کلاس‌ها و جوین کردن با مجموعه‌های Course و Grade برای نمایش نام آن‌ها
+    // دریافت کلاس‌ها و جوین کردن با مجموعه‌های Course و Grade و School برای نمایش نام آن‌ها
     const classrooms = await Classroom.find({ teacher: teacher._id, isActive: true })
+      .populate('school', 'name color')
       .populate('course', 'name code')
       .populate('grade', 'name')
       .sort({ createdAt: -1 })
@@ -163,6 +171,9 @@ export const addStudentsToClassroom = async (req: Request, res: Response): Promi
       const firstName = typeof studentData === 'string' ? undefined : studentData.firstName;
       const lastName = typeof studentData === 'string' ? undefined : studentData.lastName;
       const fatherName = typeof studentData === 'string' ? undefined : studentData.fatherName;
+      const parentPhone = typeof studentData === 'string' ? undefined : studentData.parentPhone;
+      const birthDate = typeof studentData === 'string' ? undefined : studentData.birthDate;
+      const specialNotes = typeof studentData === 'string' ? undefined : studentData.specialNotes;
 
       const existingMembership = await ClassMembership.findOne({ classId: classroomId, studentPhone: phone });
       if (!existingMembership) {
@@ -172,18 +183,24 @@ export const addStudentsToClassroom = async (req: Request, res: Response): Promi
           firstName,
           lastName,
           fatherName,
+          parentPhone,
+          birthDate,
+          specialNotes,
           status: 'ACTIVE',
           source: 'MANUAL'
         });
       } else {
         // بروزرسانی اطلاعات اگر قبلا فقط با شماره ثبت شده بود
-        if (firstName || lastName || fatherName) {
+        if (firstName || lastName || fatherName || parentPhone || birthDate || specialNotes) {
            await ClassMembership.updateOne(
              { _id: existingMembership._id },
              { $set: { 
                  ...(firstName && { firstName }),
                  ...(lastName && { lastName }),
-                 ...(fatherName && { fatherName })
+                 ...(fatherName && { fatherName }),
+                 ...(parentPhone && { parentPhone }),
+                 ...(birthDate && { birthDate }),
+                 ...(specialNotes && { specialNotes })
                } 
              }
            );
@@ -440,3 +457,37 @@ export const getClassroomReports = async (req: Request, res: Response): Promise<
     res.status(500).json({ success: false, message: 'خطای سرور' });
   }
 };
+
+// ----------------------------------------------------------------------
+// حذف کامل کلاس
+// ----------------------------------------------------------------------
+export const deleteClassroom = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { classroomId } = req.params;
+    
+    // Check if classroom exists
+    const classroom = await Classroom.findById(classroomId);
+    if (!classroom) {
+      res.status(404).json({ success: false, message: 'کلاس یافت نشد' });
+      return;
+    }
+
+    // Delete classroom
+    await Classroom.findByIdAndDelete(classroomId);
+
+    // Also delete memberships
+    await ClassMembership.deleteMany({ classId: classroomId });
+
+    // Also delete weekly schedules for this class
+    await WeeklySchedule.deleteMany({ classId: classroomId });
+
+    // Also delete class sessions and attendance records
+    await ClassSession.deleteMany({ classId: classroomId });
+    await AttendanceRecord.deleteMany({ classId: classroomId });
+
+    res.json({ success: true, message: 'کلاس با موفقیت حذف شد' });
+  } catch (error) {
+    logger.error('Error deleting classroom:', error);
+    res.status(500).json({ success: false, message: 'خطای سرور در حذف کلاس' });
+  }
+}

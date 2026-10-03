@@ -7,6 +7,9 @@ export interface IClassMembership extends Document {
   firstName?: string
   lastName?: string
   fatherName?: string
+  parentPhone?: string
+  birthDate?: string
+  specialNotes?: string
   status: 'ACTIVE' | 'PENDING' | 'UNMATCHED' | 'ARCHIVED'
   source: 'MANUAL' | 'EXAM_LINK' | 'INVITATION'
   joinedAt: Date
@@ -20,6 +23,9 @@ const classMembershipSchema = new Schema<IClassMembership>(
     firstName: { type: String },
     lastName: { type: String },
     fatherName: { type: String },
+    parentPhone: { type: String },
+    birthDate: { type: String },
+    specialNotes: { type: String },
     status: { type: String, enum: ['ACTIVE', 'PENDING', 'UNMATCHED', 'ARCHIVED'], default: 'ACTIVE' },
     source: { type: String, enum: ['MANUAL', 'EXAM_LINK', 'INVITATION'], default: 'MANUAL' },
     joinedAt: { type: Date, default: Date.now }

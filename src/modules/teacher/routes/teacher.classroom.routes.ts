@@ -8,8 +8,15 @@ import {
   getUnmatchedResults,
   matchStudentResult,
   getClassroomReports,
-  updateClassroom
+  updateClassroom,
+  deleteClassroom
 } from '../controllers/teacher.classroom.controller.js'
+import {
+  getClassSessions,
+  getSessionAttendance,
+  saveSessionAttendance,
+  getStudentAttendanceHistory
+} from '../controllers/teacher.attendance.controller.js'
 import { protect, teacherOnly } from '../../../core/middleware/auth.js'
 
 const router = Router()
@@ -40,7 +47,15 @@ router.post('/:classroomId/unmatched/:sessionId/match', matchStudentResult)
 // دریافت گزارشات و آمارهای کلاس
 router.get('/:classroomId/reports', getClassroomReports)
 
-// ویرایش اطلاعات کلاس
-router.put('/:classroomId', updateClassroom)
+// ویرایش و حذف اطلاعات کلاس
+router.route('/:classroomId')
+  .put(updateClassroom)
+  .delete(deleteClassroom)
+
+// Attendance routes
+router.get('/:classroomId/sessions', getClassSessions)
+router.get('/:classroomId/sessions/:sessionId/attendance', getSessionAttendance)
+router.post('/:classroomId/sessions/:sessionId/attendance', saveSessionAttendance)
+router.get('/:classroomId/students/:studentPhone/attendance', getStudentAttendanceHistory)
 
 export default router
