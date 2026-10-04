@@ -17,6 +17,7 @@ import {
   saveSessionAttendance,
   getStudentAttendanceHistory
 } from '../controllers/teacher.attendance.controller.js'
+import gradebookRoutes from './teacher.gradebook.routes.js'
 import { protect, teacherOnly } from '../../../core/middleware/auth.js'
 
 const router = Router()
@@ -57,5 +58,8 @@ router.get('/:classroomId/sessions', getClassSessions)
 router.get('/:classroomId/sessions/:sessionId/attendance', getSessionAttendance)
 router.post('/:classroomId/sessions/:sessionId/attendance', saveSessionAttendance)
 router.get('/:classroomId/students/:studentPhone/attendance', getStudentAttendanceHistory)
+
+// Gradebook routes
+router.use('/:classroomId/gradebook', gradebookRoutes)
 
 export default router

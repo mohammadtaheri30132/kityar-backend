@@ -16,6 +16,7 @@
     "express": "^4.21.2",
     "express-rate-limit": "^8.7.0",
     "jsonwebtoken": "^9.0.2",
+    "moment-jalaali": "^0.10.5",
     "mongoose": "^8.9.5",
     "multer": "^2.3.0",
     "uuid": "^14.0.1",
