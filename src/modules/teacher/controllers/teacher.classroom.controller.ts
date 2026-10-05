@@ -8,6 +8,7 @@ import { StudentProfile } from '../../../core/models/StudentProfile.js'
 import { TeacherProfile } from '../../../core/models/TeacherProfile.js'
 import { Exam } from '../../../core/models/Exam.js'
 import { ExamSession } from '../../../core/models/ExamSession.js'
+import { GradebookRecord } from '../../../core/models/GradebookRecord.js'
 import { logger } from '../../../core/utils/logger.js'
 
 // دریافت پروفایل معلم (تابع کمکی برای استفاده در کنترلرها)
@@ -489,5 +490,72 @@ export const deleteClassroom = async (req: Request, res: Response): Promise<void
   } catch (error) {
     logger.error('Error deleting classroom:', error);
     res.status(500).json({ success: false, message: 'خطای سرور در حذف کلاس' });
+  }
+}
+
+export const getStudentProfileFull = async (req: Request | any, res: Response) => {
+  try {
+    const { classroomId, studentPhone } = req.params;
+    
+    const membership = await ClassMembership.findOne({ classId: classroomId, studentPhone });
+    if (!membership) return res.status(404).json({ success: false, message: 'Student not found in this class' });
+
+    // Attendance
+    const attendanceRecords = await AttendanceRecord.find({ classId: classroomId, studentPhone }).populate('sessionId').lean();
+    
+    // Notes
+    const notes = await GradebookRecord.find({ classroom: classroomId, student: studentPhone, type: 'note' }).sort({ date: -1 }).lean();
+
+    // Exams for this class (Basic info)
+    // We can just fetch Exams and check if this student has participated in ExamSessions.
+    // For now, let's just return what we can easily.
+    
+    res.json({
+      success: true,
+      data: {
+        membership,
+        attendance: attendanceRecords,
+        notes
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+}
+
+export const updateStudentInfo = async (req: Request | any, res: Response) => {
+  try {
+    const { classroomId, studentPhone } = req.params;
+    const { firstName, lastName, fatherName, parentPhone } = req.body;
+    
+    await ClassMembership.updateOne(
+      { classId: classroomId, studentPhone },
+      { $set: { firstName, lastName, fatherName, parentPhone } }
+    );
+    res.json({ success: true });
+  } catch(error) {
+    res.status(500).json({ success: false });
+  }
+}
+
+export const addStudentNote = async (req: Request | any, res: Response) => {
+  try {
+    const { classroomId, studentPhone } = req.params;
+    const { title, color } = req.body;
+    
+    const note = await GradebookRecord.create({
+      teacher: req.user._id,
+      classroom: classroomId,
+      student: studentPhone,
+      date: new Date().toISOString().split('T')[0],
+      type: 'note',
+      color: color || 'neutral',
+      title
+    });
+    
+    res.json({ success: true, data: note });
+  } catch(error) {
+    res.status(500).json({ success: false });
   }
 }

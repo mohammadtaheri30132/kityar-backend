@@ -9,7 +9,10 @@ import {
   matchStudentResult,
   getClassroomReports,
   updateClassroom,
-  deleteClassroom
+  deleteClassroom,
+  getStudentProfileFull,
+  updateStudentInfo,
+  addStudentNote
 } from '../controllers/teacher.classroom.controller.js'
 import {
   getClassSessions,
@@ -35,6 +38,11 @@ router.post('/:classroomId/students', addStudentsToClassroom)
 
 // حذف یک دانش‌آموز مشخص از کلاس
 router.delete('/:classroomId/students/:studentPhone', removeStudentFromClassroom)
+
+// دریافت پروفایل کامل یک دانش‌آموز شامل یادداشت‌ها و حضور غیاب
+router.get('/:classroomId/students/:studentPhone/profile', getStudentProfileFull)
+router.put('/:classroomId/students/:studentPhone/profile', updateStudentInfo)
+router.post('/:classroomId/students/:studentPhone/notes', addStudentNote)
 
 // دریافت لیست دقیق دانش‌آموزان با عضویت‌ها
 router.get('/:classroomId/students/list', getClassroomStudents)
