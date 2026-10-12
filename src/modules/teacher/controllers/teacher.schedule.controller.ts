@@ -5,7 +5,14 @@ import { logger } from '../../../core/utils/logger.js'
 export const getSchedule = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req as any).user?.id
-    const schedule = await WeeklySchedule.find({ teacherId: userId })
+    const { classId } = req.query
+    
+    const query: any = { teacherId: userId }
+    if (classId) {
+      query.classId = classId
+    }
+
+    const schedule = await WeeklySchedule.find(query)
       .populate('schoolId', 'name')
       .populate('classId', 'name')
       .sort({ dayOfWeek: 1, startTime: 1 })

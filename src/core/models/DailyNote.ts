@@ -2,10 +2,15 @@ import mongoose, { Document, Schema } from 'mongoose'
 
 export interface IDailyNote extends Document {
   teacherId: mongoose.Types.ObjectId
+  classId?: mongoose.Types.ObjectId
   date: string // e.g., '1405-07-25'
   title?: string
   content: string
   color?: string
+  images?: string[]
+  voice?: string
+  blocks?: { type: string, content: string }[]
+  tasks?: { title: string, isCompleted: boolean }[]
   createdAt: Date
   updatedAt: Date
 }
@@ -16,6 +21,11 @@ const dailyNoteSchema = new Schema<IDailyNote>(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
+      index: true,
+    },
+    classId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Classroom',
       index: true,
     },
     date: {
@@ -36,6 +46,16 @@ const dailyNoteSchema = new Schema<IDailyNote>(
       type: String,
       default: '#fef08a' // Default yellow pastel
     },
+    images: [{ type: String }],
+    voice: { type: String },
+    blocks: [{
+      type: { type: String }, // 'text', 'image', 'voice'
+      content: { type: String }
+    }],
+    tasks: [{
+      title: { type: String },
+      isCompleted: { type: Boolean, default: false }
+    }]
   },
   {
     timestamps: true,

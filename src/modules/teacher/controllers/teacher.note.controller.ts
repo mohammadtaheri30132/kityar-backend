@@ -9,8 +9,9 @@ export const getNotes = async (req: Request, res: Response): Promise<void> => {
 
     const query: any = { teacherId: userId }
     if (date) query.date = date
+    if (req.query.classId) query.classId = req.query.classId
 
-    const notes = await DailyNote.find(query).sort({ createdAt: -1 })
+    const notes = await DailyNote.find(query).populate('classId', 'name').sort({ createdAt: -1 })
     res.json({ success: true, data: notes })
   } catch (error) {
     logger.error('Error in getNotes:', error)

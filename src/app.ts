@@ -17,6 +17,7 @@ import adminRoutes from './modules/admin/admin.routes.js'
 import teacherRoutes from './modules/teacher/teacher.routes.js'
 import studentRoutes from './modules/student/student.routes.js'
 import studentAuthRoutes from './modules/student/routes/student.auth.routes.js';
+import publicFormRoutes from './modules/public/routes/public.form.routes.js';
 dotenv.config()
 
 const app = express()
@@ -77,6 +78,13 @@ app.get('/exam/join/:examId', (req, res) => {
 app.get('/student/exam/start/:examId', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/exam-room.html')); 
 });
+
+// وقتی کاربر لینک عمومی فرم‌ساز را باز می‌کند، وب‌اپلیکیشن تعاملی پاسخگویی به فرم را برمی‌گردانیم
+app.get(['/forms/:slugOrId', '/f/:slugOrId'], (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/form-app.html'));
+});
+
+app.use('/api/public/forms', publicFormRoutes);
 app.use('/api/admin', adminRoutes)
 app.use('/api/teacher', teacherRoutes)
 app.use('/api/student', studentRoutes)

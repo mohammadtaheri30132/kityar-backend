@@ -14,9 +14,13 @@ import classRoutes from './routes/teacher.class.routes.js'
 import scheduleRoutes from './routes/teacher.schedule.routes.js'
 import announcementRoutes from './routes/teacher.announcement.routes.js'
 import systemEventRoutes from './routes/teacher.systemEvent.routes.js'
+import formRoutes from './routes/teacher.form.routes.js'
+import communityRoutes from './routes/teacher.community.routes.js'
 
 const teacherRouter = Router()
 
+teacherRouter.use('/community', communityRoutes)
+teacherRouter.use('/forms', formRoutes)
 teacherRouter.use('/exams', examRoutes)
 teacherRouter.use('/auth', authRoutes)
 teacherRouter.use('/profile', profileRoutes)
