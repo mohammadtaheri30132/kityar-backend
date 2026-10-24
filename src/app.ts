@@ -18,6 +18,12 @@ import teacherRoutes from './modules/teacher/teacher.routes.js'
 import studentRoutes from './modules/student/student.routes.js'
 import studentAuthRoutes from './modules/student/routes/student.auth.routes.js';
 import publicFormRoutes from './modules/public/routes/public.form.routes.js';
+import publicClassroomRoutes from './modules/public/routes/public.classroom.routes.js';
+import publicRankEstimateRoutes from './modules/public/routes/public.rankEstimate.routes.js';
+import publicMusicRoutes from './modules/public/routes/public.music.routes.js';
+import publicPhonebookRoutes from './modules/public/routes/public.phonebook.routes.js';
+import chatRoutes from './modules/chat/chat.routes.js';
+import { backfillClassroomCodes } from './modules/teacher/controllers/teacher.classroom.controller.js';
 dotenv.config()
 
 const app = express()
@@ -84,11 +90,21 @@ app.get(['/forms/:slugOrId', '/f/:slugOrId'], (req, res) => {
   res.sendFile(path.join(__dirname, '../public/form-app.html'));
 });
 
+// وقتی دانش‌آموز لینک ثبت‌نام در کلاس را باز می‌کند، وب‌اپلیکیشن ثبت‌نام دانش‌آموز را ارسال می‌کنیم
+app.get(['/class/join/:code', '/c/:code', '/classrooms/register/:code'], (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/student-register.html'));
+});
+
 app.use('/api/public/forms', publicFormRoutes);
+app.use('/api/public/classroom', publicClassroomRoutes);
+app.use('/api/public/rank-estimate', publicRankEstimateRoutes);
+app.use('/api/public/music', publicMusicRoutes);
+app.use('/api/public/phonebook', publicPhonebookRoutes);
 app.use('/api/admin', adminRoutes)
 app.use('/api/teacher', teacherRoutes)
 app.use('/api/student', studentRoutes)
 app.use('/api/student/auth', studentAuthRoutes);
+app.use('/api/chat', chatRoutes);
 // فردا روزی که بخش موبایل رو ساختی، فقط کافیه این دو خط رو از کامنت دربیاری:
 // import mobileRoutes from './modules/mobile/mobile.routes.js'
 // app.use('/api/mobile', mobileRoutes)
@@ -100,6 +116,7 @@ app.use(errorHandler)
 const startServer = async () => {
   try {
     await connectDB()
+    await backfillClassroomCodes()
     app.listen(PORT, () => {
       logger.info(`🚀 سرور روی پورت ${PORT} در حال اجراست`)
       logger.info(`📍 آدرس: http://localhost:${PORT}`)

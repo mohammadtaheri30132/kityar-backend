@@ -1,5 +1,5 @@
 import { Request, Response } from 'express'
-import { Classroom } from '../../../core/models/Classroom.js'
+import { Classroom, generateUniqueClassCode } from '../../../core/models/Classroom.js'
 import { ClassMembership } from '../../../core/models/ClassMembership.js'
 import { WeeklySchedule } from '../../../core/models/WeeklySchedule.js'
 import { ClassSession } from '../../../core/models/ClassSession.js'
@@ -10,6 +10,7 @@ import { Exam } from '../../../core/models/Exam.js'
 import { ExamSession } from '../../../core/models/ExamSession.js'
 import { GradebookRecord } from '../../../core/models/GradebookRecord.js'
 import { logger } from '../../../core/utils/logger.js'
+import { checkStudentNameSimilarity } from '../../../core/utils/studentMatcher.js'
 
 // دریافت پروفایل معلم (تابع کمکی برای استفاده در کنترلرها)
 const getTeacherProfile = async (userId: string) => {
@@ -35,10 +36,13 @@ export const createClassroom = async (req: Request, res: Response): Promise<void
       return
     }
 
+    const code = await generateUniqueClassCode()
+
     const newClassroom = new Classroom({
       teacher: teacher._id,
       school: schoolId || undefined,
       name,
+      code,
       course: course || undefined,
       grade: grade || undefined,
       subjectName,
@@ -106,6 +110,9 @@ export const updateClassroom = async (req: Request, res: Response): Promise<void
 /**
  * دریافت لیست کلاس‌های معلم
  */
+/**
+ * دریافت لیست کلاس‌های معلم
+ */
 export const getMyClassrooms = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req as any).user?.id
@@ -123,6 +130,14 @@ export const getMyClassrooms = async (req: Request, res: Response): Promise<void
       .populate('grade', 'name')
       .sort({ createdAt: -1 })
 
+    // اطمینان از اینکه همه کلاس‌ها دارای شناسه عددی یکتا باشند
+    for (const c of classrooms) {
+      if (!c.code) {
+        c.code = await generateUniqueClassCode()
+        await Classroom.updateOne({ _id: c._id }, { $set: { code: c.code } })
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: classrooms,
@@ -130,6 +145,65 @@ export const getMyClassrooms = async (req: Request, res: Response): Promise<void
   } catch (error: any) {
     logger.error('❌ خطا در دریافت لیست کلاس‌ها:', error)
     res.status(500).json({ success: false, message: 'خطای سرور' })
+  }
+}
+
+/**
+ * دریافت اطلاعات یک کلاس با شناسه کلاس
+ */
+export const getClassroomById = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req as any).user?.id
+    const { classroomId } = req.params
+    const teacher = await getTeacherProfile(userId)
+
+    if (!teacher) {
+      res.status(403).json({ success: false, message: 'پروفایل معلم یافت نشد' })
+      return
+    }
+
+    const classroom = await Classroom.findOne({ _id: classroomId, teacher: teacher._id })
+      .populate('school', 'name color')
+      .populate('course', 'name code')
+      .populate('grade', 'name')
+
+    if (!classroom) {
+      res.status(404).json({ success: false, message: 'کلاس یافت نشد' })
+      return
+    }
+
+    if (!classroom.code) {
+      classroom.code = await generateUniqueClassCode()
+      await Classroom.updateOne({ _id: classroom._id }, { $set: { code: classroom.code } })
+    }
+
+    res.status(200).json({
+      success: true,
+      data: classroom,
+    })
+  } catch (error: any) {
+    logger.error('❌ خطا در دریافت اطلاعات کلاس:', error)
+    res.status(500).json({ success: false, message: 'خطای سرور' })
+  }
+}
+
+/**
+ * بک‌فیل کدهای کلاس برای کلاس‌های قدیمی
+ */
+export const backfillClassroomCodes = async (): Promise<void> => {
+  try {
+    const missing = await Classroom.find({
+      $or: [{ code: { $exists: false } }, { code: null }, { code: '' }]
+    })
+    for (const c of missing) {
+      const code = await generateUniqueClassCode()
+      await Classroom.updateOne({ _id: c._id }, { $set: { code } })
+    }
+    if (missing.length > 0) {
+      logger.info(`✅ شناسه عددی برای ${missing.length} کلاس با موفقیت تولید شد.`)
+    }
+  } catch (err) {
+    logger.error('❌ خطا در مقداردهی اولیه کدهای کلاسی:', err)
   }
 }
 
@@ -273,8 +347,8 @@ export const getClassroomStudents = async (req: Request, res: Response): Promise
       return;
     }
 
-    // دریافت اعضای کلاس
-    const memberships = await ClassMembership.find({ classId: classroomId })
+    // دریافت اعضای فعال کلاس (دانش‌آموزان تایید شده)
+    const memberships = await ClassMembership.find({ classId: classroomId, status: 'ACTIVE' })
       .populate({
         path: 'studentId',
         populate: { path: 'user', select: 'fullName username' }
@@ -290,6 +364,240 @@ export const getClassroomStudents = async (req: Request, res: Response): Promise
     res.status(500).json({ success: false, message: 'خطای سرور' });
   }
 }
+
+/**
+ * دریافت درخواست‌های عضویت در انتظار تایید کلاس همراه با بررسی تطبیق هوشمند (Join Requests)
+ */
+export const getClassroomJoinRequests = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req as any).user?.id;
+    const { classroomId } = req.params;
+
+    const teacher = await getTeacherProfile(userId);
+    const classroom = await Classroom.findOne({ _id: classroomId, teacher: teacher?._id });
+
+    if (!classroom) {
+      res.status(404).json({ success: false, message: 'کلاس یافت نشد' });
+      return;
+    }
+
+    // دریافت تمام درخواست‌های در انتظار تایید
+    const pendingRequests = await ClassMembership.find({
+      classId: classroomId,
+      status: 'PENDING'
+    }).sort({ createdAt: -1 });
+
+    // دریافت تمام دانش‌آموزان فعال که به صورت دستی وارد شده‌اند (بدون تیک آبی)
+    const manualStudents = await ClassMembership.find({
+      classId: classroomId,
+      status: 'ACTIVE',
+      $or: [
+        { isVerified: false },
+        { isVerified: { $exists: false } },
+        { source: 'MANUAL' }
+      ]
+    });
+
+    // بررسی تطبیق هوشمند برای هر درخواست (شباهت >= ۷۰٪ یا شامل بودن)
+    const requestsWithMatches = pendingRequests.map((reqDoc) => {
+      const reqObj = reqDoc.toObject();
+      const reqFullName = `${reqDoc.firstName || ''} ${reqDoc.lastName || ''}`.trim();
+
+      const similarityMatches: any[] = [];
+
+      for (const manual of manualStudents) {
+        const manualFullName = `${manual.firstName || ''} ${manual.lastName || ''}`.trim();
+        const sim = checkStudentNameSimilarity(reqFullName, manualFullName);
+
+        if (sim.isMatch) {
+          similarityMatches.push({
+            membershipId: manual._id,
+            firstName: manual.firstName,
+            lastName: manual.lastName,
+            fatherName: manual.fatherName,
+            studentPhone: manual.studentPhone,
+            parentPhone: manual.parentPhone,
+            birthDate: manual.birthDate,
+            specialNotes: manual.specialNotes,
+            score: sim.score,
+            percent: sim.percent,
+            reason: sim.reason,
+          });
+        }
+      }
+
+      return {
+        ...reqObj,
+        hasSimilarity: similarityMatches.length > 0,
+        similarityMatches,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      count: requestsWithMatches.length,
+      data: requestsWithMatches,
+    });
+  } catch (error: any) {
+    logger.error('❌ خطا در دریافت درخواست‌های عضویت کلاس:', error);
+    res.status(500).json({ success: false, message: 'خطای سرور در دریافت درخواست‌ها' });
+  }
+};
+
+/**
+ * پذیرش درخواست عضویت دانش‌آموز (مستقیم یا ادغام با دانش‌آموز دستی قبلی)
+ */
+export const acceptClassroomJoinRequest = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req as any).user?.id;
+    const { classroomId, requestId } = req.params;
+    const { action, targetMembershipId } = req.body; // action: 'DIRECT' | 'MERGE'
+
+    const teacher = await getTeacherProfile(userId);
+    const classroom = await Classroom.findOne({ _id: classroomId, teacher: teacher?._id });
+
+    if (!classroom) {
+      res.status(404).json({ success: false, message: 'کلاس یافت نشد' });
+      return;
+    }
+
+    const pendingRequest = await ClassMembership.findOne({
+      _id: requestId,
+      classId: classroomId,
+      status: 'PENDING'
+    });
+
+    if (!pendingRequest) {
+      res.status(404).json({ success: false, message: 'درخواست عضویت یافت نشد یا قبلاً بررسی شده است.' });
+      return;
+    }
+
+    // حالت اول: ادغام با دانش‌آموز دستی قبلی
+    if (action === 'MERGE' && targetMembershipId) {
+      const targetManualStudent = await ClassMembership.findOne({
+        _id: targetMembershipId,
+        classId: classroomId,
+      });
+
+      if (!targetManualStudent) {
+        res.status(404).json({ success: false, message: 'دانش‌آموز دستی مورد نظر جهت ادغام یافت نشد.' });
+        return;
+      }
+
+      // به‌روزرسانی آرایه شماره‌های کلاس
+      if (targetManualStudent.studentPhone && targetManualStudent.studentPhone !== pendingRequest.studentPhone) {
+        await Classroom.updateOne(
+          { _id: classroomId },
+          { $pull: { students: targetManualStudent.studentPhone } }
+        );
+        // انتقال سوابق حضور غیاب قبلی به شماره جدید
+        await AttendanceRecord.updateMany(
+          { studentPhone: targetManualStudent.studentPhone },
+          { $set: { studentPhone: pendingRequest.studentPhone } }
+        );
+      }
+      await Classroom.updateOne(
+        { _id: classroomId },
+        { $addToSet: { students: pendingRequest.studentPhone } }
+      );
+
+      // استخراج اطلاعات درخواست قبل از حذف
+      const newPhone = pendingRequest.studentPhone;
+      const newStudentId = pendingRequest.studentId;
+      const newFirstName = pendingRequest.firstName;
+      const newLastName = pendingRequest.lastName;
+      const newFatherName = pendingRequest.fatherName;
+      const newParentPhone = pendingRequest.parentPhone;
+      const newBirthDate = pendingRequest.birthDate;
+      const newSpecialNotes = pendingRequest.specialNotes;
+
+      // ۱. حذف درخواست اضافی جهت جلوگیری از خطای duplicate key در ایندکس classId + studentPhone
+      await ClassMembership.deleteOne({ _id: pendingRequest._id });
+
+      // ۲. به‌روزرسانی پرونده دانش‌آموز دستی و اعطای تیک آبی (معتبر)
+      targetManualStudent.studentPhone = newPhone;
+      if (newStudentId) targetManualStudent.studentId = newStudentId;
+      if (newFirstName) targetManualStudent.firstName = newFirstName;
+      if (newLastName) targetManualStudent.lastName = newLastName;
+      if (newFatherName) targetManualStudent.fatherName = newFatherName;
+      if (newParentPhone) targetManualStudent.parentPhone = newParentPhone;
+      if (newBirthDate) targetManualStudent.birthDate = newBirthDate;
+      if (newSpecialNotes) targetManualStudent.specialNotes = newSpecialNotes;
+      targetManualStudent.status = 'ACTIVE';
+      targetManualStudent.source = 'INVITATION';
+      targetManualStudent.isVerified = true; // اعطای تیک آبی
+      await targetManualStudent.save();
+
+      logger.info(`🔗 دانش‌آموز وب ${pendingRequest.firstName} ${pendingRequest.lastName} با پرونده دستی ${targetManualStudent._id} ادغام و تایید شد.`);
+
+      res.status(200).json({
+        success: true,
+        message: 'دانش‌آموز با پرونده قبلی تطبیق داده شد و با نشان تیک آبی تایید گردید.',
+        data: targetManualStudent,
+      });
+      return;
+    }
+
+    // حالت دوم: پذیرش مستقیم به عنوان دانش‌آموز جدید
+    await Classroom.updateOne(
+      { _id: classroomId },
+      { $addToSet: { students: pendingRequest.studentPhone } }
+    );
+
+    pendingRequest.status = 'ACTIVE';
+    pendingRequest.source = 'INVITATION';
+    pendingRequest.isVerified = true; // اعطای تیک آبی
+    await pendingRequest.save();
+
+    logger.info(`✅ درخواست دانش‌آموز ${pendingRequest.firstName} ${pendingRequest.lastName} مستقیماً با تیک آبی پذیرفته شد.`);
+
+    res.status(200).json({
+      success: true,
+      message: 'دانش‌آموز با موفقیت تایید شد و با نشان تیک آبی به کلاس افزوده گردید.',
+      data: pendingRequest,
+    });
+  } catch (error: any) {
+    logger.error('❌ خطا در پذیرش درخواست عضویت:', error);
+    res.status(500).json({ success: false, message: 'خطای سرور در پذیرش درخواست' });
+  }
+};
+
+/**
+ * رد یا حذف درخواست عضویت دانش‌آموز
+ */
+export const rejectClassroomJoinRequest = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = (req as any).user?.id;
+    const { classroomId, requestId } = req.params;
+
+    const teacher = await getTeacherProfile(userId);
+    const classroom = await Classroom.findOne({ _id: classroomId, teacher: teacher?._id });
+
+    if (!classroom) {
+      res.status(404).json({ success: false, message: 'کلاس یافت نشد' });
+      return;
+    }
+
+    const deleted = await ClassMembership.findOneAndDelete({
+      _id: requestId,
+      classId: classroomId,
+      status: 'PENDING',
+    });
+
+    if (!deleted) {
+      res.status(404).json({ success: false, message: 'درخواست یافت نشد' });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'درخواست عضویت با موفقیت حذف شد.',
+    });
+  } catch (error: any) {
+    logger.error('❌ خطا در رد درخواست عضویت:', error);
+    res.status(500).json({ success: false, message: 'خطای سرور در رد درخواست' });
+  }
+};
 
 /**
  * دریافت نتایج آزمون‌های این کلاس که هنوز به دانش‌آموزی متصل نشده‌اند (Needs Review)

@@ -43,6 +43,9 @@ export const getQuestionsBank = async (req: Request, res: Response): Promise<voi
   try {
     const userId = (req as any).user?.id;
     const origin = req.query.origin as string || 'mine';
+    const type = req.query.type as string;
+    const difficulty = req.query.difficulty as string;
+    const search = req.query.search as string;
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
     const skip = (page - 1) * limit;
@@ -52,6 +55,22 @@ export const getQuestionsBank = async (req: Request, res: Response): Promise<voi
       query.createdBy = userId;
     } else if (origin === 'admin') {
       query.createdBy = { $ne: userId };
+    }
+
+    if (type && type !== 'all') {
+      if (type === 'تشریحی') {
+        query.type = { $in: ['تشریحی', 'گسترده-پاسخ', 'کوتاه-پاسخ'] };
+      } else {
+        query.type = type;
+      }
+    }
+
+    if (difficulty && difficulty !== 'all') {
+      query.difficulty = difficulty;
+    }
+
+    if (search && search.trim()) {
+      query.question = { $regex: search.trim(), $options: 'i' };
     }
 
     const totalItems = await Question.countDocuments(query);

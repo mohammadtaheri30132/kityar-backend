@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ثبت‌نام دانش‌آموز در کلاس | کیتایار</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --primary-light: #eff6ff;
+      --accent: #8b5cf6;
+      --nokita: #7c3aed;
+      --nokita-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
+      --surface: #ffffff;
+      --bg: #f8fafc;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --border: #e2e8f0;
+      --success: #10b981;
+      --error: #ef4444;
+      --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+      --shadow: 0 10px 25px -5px rgb(0 0 0 / 0.08), 0 8px 10px -6px rgb(0 0 0 / 0.05);
+      --shadow-lg: 0 20px 30px -10px rgb(99 102 241 / 0.2);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Vazirmatn', system-ui, -apple-system, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1.25rem 1rem 3rem;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* Logo & Header */
+    .brand-header {
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+    .brand-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(37, 99, 235, 0.1);
+      color: var(--primary);
+      padding: 0.4rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 0.6rem;
+    }
+    .brand-title {
+      font-size: 1.4rem;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 0.25rem;
+    }
+    .brand-desc {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+    }
+
+    /* Classroom Hero Card */
+    .class-hero-card {
+      background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #3b82f6 100%);
+      color: white;
+      border-radius: 20px;
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+      box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.35);
+      position: relative;
+      overflow: hidden;
+    }
+    .class-hero-card::after {
+      content: '';
+      position: absolute;
+      top: -30px;
+      left: -30px;
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      pointer-events: none;
+    }
+    .class-hero-badge {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(8px);
+      padding: 0.25rem 0.75rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      margin-bottom: 0.5rem;
+    }
+    .class-hero-name {
+      font-size: 1.35rem;
+      font-weight: 800;
+      margin-bottom: 0.5rem;
+      line-height: 1.3;
+    }
+    .class-hero-details {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      font-size: 0.85rem;
+      opacity: 0.95;
+      padding-top: 0.75rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    .class-detail-item {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .class-code-pill {
+      margin-right: auto;
+      background: #ffffff;
+      color: #1e3a8a;
+      font-weight: 800;
+      padding: 0.2rem 0.6rem;
+      border-radius: 6px;
+      letter-spacing: 1px;
+      font-size: 0.9rem;
+    }
+
+    /* Main Form Card */
+    .card {
+      background: var(--surface);
+      border-radius: 20px;
+      padding: 1.75rem 1.5rem;
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(226, 232, 240, 0.8);
+      position: relative;
+    }
+
+    /* Step Indicator */
+    .steps-indicator {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.75rem;
+      position: relative;
+    }
+    .steps-indicator::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 15%;
+      right: 15%;
+      height: 2px;
+      background: #e2e8f0;
+      z-index: 1;
+      transform: translateY(-50%);
+    }
+    .step-item {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .step-dot {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #f1f5f9;
+      color: var(--text-muted);
+      border: 2px solid #cbd5e1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      font-weight: 700;
+      transition: all 0.25s ease;
+    }
+    .step-item.active .step-dot {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15);
+    }
+    .step-item.completed .step-dot {
+      background: var(--success);
+      color: white;
+      border-color: var(--success);
+    }
+    .step-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .step-item.active .step-label {
+      color: var(--primary);
+    }
+
+    /* Form Fields */
+    .form-group {
+      margin-bottom: 1.15rem;
+    }
+    .form-label {
+      display: block;
+      margin-bottom: 0.45rem;
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: #334155;
+    }
+    .form-label .required {
+      color: var(--error);
+      margin-right: 0.2rem;
+    }
+    .input-wrapper {
+      position: relative;
+    }
+    .form-input {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      border: 1.5px solid var(--border);
+      border-radius: 12px;
+      font-size: 0.95rem;
+      transition: all 0.2s ease;
+      background: #fdfdfd;
+      color: var(--text);
+    }
+    .form-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: #ffffff;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+    .form-input::placeholder {
+      color: #94a3b8;
+    }
+
+    /* Helper Hints & Alerts */
+    .alert-box {
+      padding: 0.75rem 1rem;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .alert-error {
+      background: #fef2f2;
+      color: #b91c1c;
+      border: 1px solid #fecaca;
+    }
+    .alert-info {
+      background: #eff6ff;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+    }
+    .alert-test-otp {
+      background: #f0fdf4;
+      color: #166534;
+      border: 1px dashed #86efac;
+      padding: 0.75rem 1rem;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.85rem;
+    }
+    .alert-test-otp strong {
+      font-size: 1.05rem;
+      letter-spacing: 2px;
+      color: #15803d;
+    }
+
+    /* Action Buttons */
+    .btn {
+      width: 100%;
+      padding: 0.95rem 1.25rem;
+      border-radius: 12px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+    }
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      transform: translateY(-1px);
+    }
+    .btn-primary:disabled {
+      background: #94a3b8;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    .btn-secondary {
+      background: #f1f5f9;
+      color: #475569;
+      margin-top: 0.75rem;
+    }
+    .btn-secondary:hover {
+      background: #e2e8f0;
+    }
+
+    /* Success / Nokita Screen */
+    .success-icon-wrap {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: #dcfce7;
+      color: #16a34a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.2rem;
+      margin: 0 auto 1.25rem;
+      animation: pop 0.4s ease;
+    }
+    @keyframes pop {
+      0% { transform: scale(0.6); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .success-title {
+      text-align: center;
+      font-size: 1.35rem;
+      font-weight: 800;
+      color: #166534;
+      margin-bottom: 0.5rem;
+    }
+    .success-desc {
+      text-align: center;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      line-height: 1.6;
+    }
+    .summary-card {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem;
+      margin-bottom: 1.75rem;
+      font-size: 0.88rem;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.35rem 0;
+      border-bottom: 1px dashed #e2e8f0;
+    }
+    .summary-row:last-child {
+      border-bottom: none;
+    }
+    .summary-key {
+      color: var(--text-muted);
+    }
+    .summary-val {
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    /* Nokita App Download Section */
+    .nokita-section {
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #a855f7 100%);
+      border-radius: 18px;
+      padding: 1.5rem;
+      color: white;
+      box-shadow: var(--shadow-lg);
+      margin-top: 1rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .nokita-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .nokita-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+    }
+    .nokita-title {
+      font-size: 1.15rem;
+      font-weight: 800;
+    }
+    .nokita-tag {
+      font-size: 0.75rem;
+      background: rgba(255, 255, 255, 0.25);
+      padding: 0.15rem 0.5rem;
+      border-radius: 6px;
+      margin-right: auto;
+    }
+    .nokita-desc {
+      font-size: 0.85rem;
+      opacity: 0.92;
+      line-height: 1.5;
+      margin-bottom: 1.25rem;
+    }
+    .nokita-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+    .btn-download-direct {
+      background: #ffffff;
+      color: #6d28d9;
+      font-weight: 800;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+    }
+    .btn-download-direct:hover {
+      transform: translateY(-2px);
+      background: #f8fafc;
+    }
+    .store-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+    .btn-store {
+      background: rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(8px);
+      color: white;
+      text-decoration: none;
+      border-radius: 10px;
+      padding: 0.65rem 0.75rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      transition: background 0.2s;
+    }
+    .btn-store:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Brand Header -->
+    <div class="brand-header">
+      <div class="brand-badge">
+        <span>🎓</span> سامانه یکپارچه کیتایار
+      </div>
+      <h1 class="brand-title">ثبت‌نام دانش‌آموز در کلاس</h1>
+      <p class="brand-desc">جهت عضویت در کلاس معلم، فرم زیر را تکمیل نمایید</p>
+    </div>
+
+    <!-- Classroom Info Hero Card -->
+    <div id="classHeroCard" class="class-hero-card">
+      <div class="class-hero-badge" id="classSchoolName">در حال بارگذاری...</div>
+      <div class="class-hero-name" id="className">کلاس درس</div>
+      <div class="class-hero-details">
+        <div class="class-detail-item">
+          <span>👨‍🏫 معلم:</span>
+          <strong id="classTeacherName">-</strong>
+        </div>
+        <div class="class-detail-item">
+          <span>📚 درس/پایه:</span>
+          <strong id="classSubjectGrade">-</strong>
+        </div>
+        <div class="class-code-pill" id="classCodePill">کد: ------</div>
+      </div>
+    </div>
+
+    <!-- Main Card -->
+    <div class="card">
+      <!-- Steps Indicator -->
+      <div class="steps-indicator" id="stepsIndicator">
+        <div class="step-item active" id="stepDot1">
+          <div class="step-dot">۱</div>
+          <span class="step-label">احراز شماره</span>
+        </div>
+        <div class="step-item" id="stepDot2">
+          <div class="step-dot">۲</div>
+          <span class="step-label">مشخصات دانش‌آموز</span>
+        </div>
+        <div class="step-item" id="stepDot3">
+          <div class="step-dot">۳</div>
+          <span class="step-label">دریافت نوکیتا</span>
+        </div>
+      </div>
+
+      <!-- Error / Alert Message Box -->
+      <div id="errorAlert" class="alert-box alert-error hidden">
+        <span>⚠️</span>
+        <span id="errorMessage">خطایی رخ داد</span>
+      </div>
+
+      <!-- ================= STEP 1: Phone & Static OTP ================= -->
+      <div id="step1Container">
+        <!-- Substep 1A: Enter Phone -->
+        <div id="substepPhone">
+          <div class="form-group">
+            <label class="form-label" for="phoneInput">
+              <span class="required">*</span> شماره موبایل دانش‌آموز
+            </label>
+            <input 
+              type="tel" 
+              id="phoneInput" 
+              class="form-input" 
+              placeholder="مثال: ۰۹۱۲۳۴۵۶۷۸۹" 
+              maxlength="11" 
+              dir="ltr" 
+              style="text-align: left; font-size: 1.1rem; letter-spacing: 1px;"
+              autocomplete="tel"
+            >
+          </div>
+          <p style="font-size: 0.8rem; color: #64748b; margin-bottom: 1.25rem; line-height: 1.5;">
+            کد تایید برای این شماره ارسال خواهد شد تا هویت شما در سامانه ثبت شود.
+          </p>
+          <button type="button" id="btnSendOtp" class="btn btn-primary">
+            <span>دریافت کد تایید</span>
+            <span>←</span>
+          </button>
+        </div>
+
+        <!-- Substep 1B: Enter OTP -->
+        <div id="substepOtp" class="hidden">
+          <div class="alert-test-otp">
+            <span>🔑 کد تایید پیامکی (تستی):</span>
+            <strong id="displayStaticOtp">۱۲۳۴</strong>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="otpInput">
+              <span class="required">*</span> کد ۴ رقمی تایید پیامکی
+            </label>
+            <input 
+              type="number" 
+              id="otpInput" 
+              class="form-input" 
+              placeholder="۱۲۳۴" 
+              maxlength="4" 
+              dir="ltr" 
+              style="text-align: center; font-size: 1.3rem; letter-spacing: 8px; font-weight: bold;"
+            >
+          </div>
+
+          <button type="button" id="btnVerifyOtp" class="btn btn-primary">
+            <span>تایید کد و ادامه</span>
+            <span>✓</span>
+          </button>
+
+          <button type="button" id="btnChangePhone" class="btn btn-secondary">
+            تغییر شماره موبایل
+          </button>
+        </div>
+      </div>
+
+      <!-- ================= STEP 2: Student Details Form ================= -->
+      <div id="step2Container" class="hidden">
+        <p style="font-size: 0.85rem; color: #475569; margin-bottom: 1.25rem; line-height: 1.5; background: #f8fafc; padding: 0.75rem; border-radius: 10px; border-right: 3px solid var(--primary);">
+          لطفاً مشخصات فردی خود را جهت ثبت در دفتر نمرات و لیست کلاسی معلم با دقت وارد کنید:
+        </p>
+
+        <form id="studentDetailsForm">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+            <div class="form-group">
+              <label class="form-label" for="firstNameInput">
+                <span class="required">*</span> نام
+              </label>
+              <input type="text" id="firstNameInput" class="form-input" placeholder="مثال: علی" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="lastNameInput">
+                <span class="required">*</span> نام خانوادگی
+              </label>
+              <input type="text" id="lastNameInput" class="form-input" placeholder="مثال: محمدی" required>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="fatherNameInput">
+              <span class="required">*</span> نام پدر
+            </label>
+            <input type="text" id="fatherNameInput" class="form-input" placeholder="مثال: حسین" required>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="studentCodeInput">
+              کد ملی / شماره دانش‌آموزی (اختیاری)
+            </label>
+            <input type="text" id="studentCodeInput" class="form-input" placeholder="۱۰ رقم کد ملی" maxlength="10" dir="ltr" style="text-align: left;">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="parentPhoneInput">
+              شماره موبایل ولی / والدین (اختیاری)
+            </label>
+            <input type="tel" id="parentPhoneInput" class="form-input" placeholder="09xxxxxxxxx" maxlength="11" dir="ltr" style="text-align: left;">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="birthDateInput">
+              تاریخ تولد (اختیاری)
+            </label>
+            <input type="text" id="birthDateInput" class="form-input" placeholder="مثال: ۱۳۸۸/۰۴/۱۵" dir="ltr" style="text-align: left;">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="specialNotesInput">
+              توضیحات یا وضعیت خاص (اختیاری)
+            </label>
+            <textarea id="specialNotesInput" class="form-input" rows="2" placeholder="اگر نکته‌ای هست که معلم باید بداند (پزشکی، آموزشی و...)"></textarea>
+          </div>
+
+          <button type="submit" id="btnSubmitRegistration" class="btn btn-primary" style="margin-top: 0.5rem;">
+            <span>عضویت نهایی در کلاس</span>
+            <span>🎉</span>
+          </button>
+        </form>
+      </div>
+
+      <!-- ================= STEP 3: Success & Nokita App ================= -->
+      <div id="step3Container" class="hidden">
+        <div class="success-icon-wrap">✓</div>
+        <h2 class="success-title">درخواست عضویت شما ثبت شد!</h2>
+        <p class="success-desc">
+          مشخصات شما با موفقیت برای کلاس <strong id="successClassName" style="color: var(--primary);">-</strong> نزد معلم <strong id="successTeacherName" style="color: var(--primary);">-</strong> ارسال شد. پس از تایید توسط معلم، عضویت شما به صورت رسمی با نشان تیک آبی تایید می‌شود.
+        </p>
+
+        <!-- Summary -->
+        <div class="summary-card">
+          <div class="summary-row">
+            <span class="summary-key">نام و نام خانوادگی:</span>
+            <span class="summary-val" id="summaryFullName">-</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-key">شماره تماس دانش‌آموز:</span>
+            <span class="summary-val" id="summaryPhone" dir="ltr">-</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-key">وضعیت درخواست:</span>
+            <span class="summary-val" style="color: #d97706;">در انتظار تایید معلم ⏳</span>
+          </div>
+        </div>
+
+        <!-- Nokita App Download Box -->
+        <div class="nokita-section">
+          <div class="nokita-header">
+            <div class="nokita-icon">📱</div>
+            <div>
+              <div class="nokita-title">نرم‌افزار «نوکیتا»</div>
+              <div style="font-size: 0.75rem; opacity: 0.85;">اپلیکیشن اختصاصی دانش‌آموزان</div>
+            </div>
+            <span class="nokita-tag">رایگان</span>
+          </div>
+
+          <p class="nokita-desc">
+            برای مشاهده تکالیف، نمرات مستمر، حضور و غیاب، شرکت در آزمون‌های آنلاین کلاسی و ارتباط مستقیم با معلم، اپلیکیشن <strong>نوکیتا</strong> را بر روی گوشی خود نصب نمایید:
+          </p>
+
+          <div class="nokita-buttons">
+            <a href="https://kitayar.ir/download/nokita.apk" id="directDownloadLink" class="btn-download-direct" target="_blank">
+              <span>📥 دانلود مستقیم نرم‌افزار نوکیتا (فایل APK)</span>
+            </a>
+            <div class="store-buttons">
+              <a href="https://cafebazaar.ir/app/com.kitayar.nokita" class="btn-store" target="_blank">
+                <span>🛒</span> دریافت از کافه بازار
+              </a>
+              <a href="https://myket.ir/app/com.kitayar.nokita" class="btn-store" target="_blank">
+                <span>🚀</span> دریافت از مایکت
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      کیتایار © سامانه ابری مدیریت آموزش و ارتباط معلمان با دانش‌آموزان
+    </div>
+  </div>
+
+  <script>
+    // استخراج شناسه کلاس از URL (مثلاً /class/join/123456 یا /c/123456 یا پارامتر ?code=)
+    function getClassCodeFromUrl() {
+      const pathParts = window.location.pathname.split('/').filter(Boolean);
+      const codeIndex = pathParts.findIndex(p => p === 'join' || p === 'c' || p === 'register');
+      if (codeIndex !== -1 && pathParts[codeIndex + 1]) {
+        return pathParts[codeIndex + 1];
+      }
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get('code') || pathParts[pathParts.length - 1];
+    }
+
+    const classCode = getClassCodeFromUrl();
+    let verifiedPhone = '';
+    let currentClassData = null;
+
+    // المان‌های صفحه
+    const errorAlert = document.getElementById('errorAlert');
+    const errorMessage = document.getElementById('errorMessage');
+
+    function showError(msg) {
+      if (!msg) {
+        errorAlert.classList.add('hidden');
+        return;
+      }
+      errorMessage.textContent = msg;
+      errorAlert.classList.remove('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function hideError() {
+      errorAlert.classList.add('hidden');
+    }
+
+    // بارگذاری اطلاعات کلاس
+    async function loadClassroomInfo() {
+      try {
+        const res = await fetch(`/api/public/classroom/info/${classCode}`);
+        const data = await res.json();
+        if (data.success && data.data) {
+          currentClassData = data.data;
+          document.getElementById('className').textContent = currentClassData.className;
+          document.getElementById('classTeacherName').textContent = currentClassData.teacherName;
+          document.getElementById('classSchoolName').textContent = currentClassData.schoolName || 'سامانه آموزشی کیتایار';
+          document.getElementById('classSubjectGrade').textContent = [currentClassData.gradeName, currentClassData.subjectName].filter(Boolean).join(' - ') || 'عمومی';
+          document.getElementById('classCodePill').textContent = `شناسه: ${currentClassData.code}`;
+        } else {
+          showError(data.message || 'اطلاعات کلاس یافت نشد.');
+          document.getElementById('className').textContent = 'کلاس نامعتبر';
+        }
+      } catch (err) {
+        showError('خطا در ارتباط با سرور.');
+      }
+    }
+
+    // مرحله ۱: ارسال OTP
+    document.getElementById('btnSendOtp').addEventListener('click', async () => {
+      hideError();
+      const phone = document.getElementById('phoneInput').value.trim();
+      if (!phone || !phone.match(/^09\d{9}$/)) {
+        showError('لطفاً شماره موبایل ۱۱ رقمی معتبر وارد کنید (مثال: ۰۹۱۲۳۴۵۶۷۸۹)');
+        return;
+      }
+
+      const btn = document.getElementById('btnSendOtp');
+      btn.disabled = true;
+      btn.innerHTML = '<span>در حال ارسال...</span>';
+
+      try {
+        const res = await fetch('/api/public/classroom/send-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, code: classCode })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          verifiedPhone = phone;
+          document.getElementById('substepPhone').classList.add('hidden');
+          document.getElementById('substepOtp').classList.remove('hidden');
+          document.getElementById('displayStaticOtp').textContent = data.staticOtp || '۱۲۳۴';
+          document.getElementById('otpInput').value = data.staticOtp || '1234'; // آماده برای تست سریع
+        } else {
+          showError(data.message || 'خطا در ارسال کد تایید');
+        }
+      } catch (err) {
+        showError('خطا در برقراری ارتباط با سرور');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>دریافت کد تایید</span><span>←</span>';
+      }
+    });
+
+    // دکمه تغییر شماره
+    document.getElementById('btnChangePhone').addEventListener('click', () => {
+      hideError();
+      document.getElementById('substepOtp').classList.add('hidden');
+      document.getElementById('substepPhone').classList.remove('hidden');
+    });
+
+    // مرحله ۱B: اعتبارسنجی OTP
+    document.getElementById('btnVerifyOtp').addEventListener('click', async () => {
+      hideError();
+      const otp = document.getElementById('otpInput').value.trim();
+      if (!otp) {
+        showError('لطفاً کد تایید را وارد کنید');
+        return;
+      }
+
+      const btn = document.getElementById('btnVerifyOtp');
+      btn.disabled = true;
+      btn.innerHTML = '<span>در حال بررسی...</span>';
+
+      try {
+        const res = await fetch('/api/public/classroom/verify-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: verifiedPhone, otp, code: classCode })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          // اگر اطلاعات قبلی وجود دارد، فرم را پر کن
+          if (data.existingData) {
+            if (data.existingData.firstName) document.getElementById('firstNameInput').value = data.existingData.firstName;
+            if (data.existingData.lastName) document.getElementById('lastNameInput').value = data.existingData.lastName;
+            if (data.existingData.fatherName) document.getElementById('fatherNameInput').value = data.existingData.fatherName;
+            if (data.existingData.parentPhone) document.getElementById('parentPhoneInput').value = data.existingData.parentPhone;
+            if (data.existingData.birthDate) document.getElementById('birthDateInput').value = data.existingData.birthDate;
+            if (data.existingData.specialNotes) document.getElementById('specialNotesInput').value = data.existingData.specialNotes;
+          }
+
+          // انتقال به مرحله ۲
+          document.getElementById('step1Container').classList.add('hidden');
+          document.getElementById('step2Container').classList.remove('hidden');
+          document.getElementById('stepDot1').classList.remove('active');
+          document.getElementById('stepDot1').classList.add('completed');
+          document.getElementById('stepDot2').classList.add('active');
+        } else {
+          showError(data.message || 'کد تایید نامعتبر است');
+        }
+      } catch (err) {
+        showError('خطا در برقراری ارتباط');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>تایید کد و ادامه</span><span>✓</span>';
+      }
+    });
+
+    // مرحله ۲: ثبت نهایی فرم
+    document.getElementById('studentDetailsForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+
+      const firstName = document.getElementById('firstNameInput').value.trim();
+      const lastName = document.getElementById('lastNameInput').value.trim();
+      const fatherName = document.getElementById('fatherNameInput').value.trim();
+      const studentCode = document.getElementById('studentCodeInput').value.trim();
+      const parentPhone = document.getElementById('parentPhoneInput').value.trim();
+      const birthDate = document.getElementById('birthDateInput').value.trim();
+      const specialNotes = document.getElementById('specialNotesInput').value.trim();
+
+      if (!firstName || !lastName || !fatherName) {
+        showError('نام، نام خانوادگی و نام پدر الزامی هستند.');
+        return;
+      }
+
+      if (parentPhone && !parentPhone.match(/^09\d{9}$/)) {
+        showError('شماره موبایل والدین نامعتبر است.');
+        return;
+      }
+
+      const btn = document.getElementById('btnSubmitRegistration');
+      btn.disabled = true;
+      btn.innerHTML = '<span>در حال ثبت اطلاعات...</span>';
+
+      try {
+        const res = await fetch('/api/public/classroom/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: classCode,
+            phone: verifiedPhone,
+            otp: '1234',
+            firstName,
+            lastName,
+            fatherName,
+            studentCode,
+            parentPhone,
+            birthDate,
+            specialNotes
+          })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          // انتقال به مرحله ۳ (موفقیت و دانلود نوکیتا)
+          document.getElementById('step2Container').classList.add('hidden');
+          document.getElementById('step3Container').classList.remove('hidden');
+          document.getElementById('stepDot2').classList.remove('active');
+          document.getElementById('stepDot2').classList.add('completed');
+          document.getElementById('stepDot3').classList.add('active', 'completed');
+
+          document.getElementById('successClassName').textContent = data.data.className;
+          document.getElementById('successTeacherName').textContent = data.data.teacherName;
+          document.getElementById('summaryFullName').textContent = `${firstName} ${lastName}`;
+          document.getElementById('summaryPhone').textContent = verifiedPhone;
+
+          if (data.data.nokitaDownload?.directApkUrl) {
+            document.getElementById('directDownloadLink').href = data.data.nokitaDownload.directApkUrl;
+          }
+
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        } else {
+          showError(data.message || 'مشکلی در ثبت‌نام رخ داد.');
+        }
+      } catch (err) {
+        showError('خطا در ارتباط با سرور.');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>عضویت نهایی در کلاس</span><span>🎉</span>';
+      }
+    });
+
+    // شروع با بارگذاری اطلاعات کلاس
+    if (classCode) {
+      loadClassroomInfo();
+    } else {
+      showError('شناسه کلاس در آدرس صفحه مشخص نشده است.');
+    }
+  </script>
+</body>
+</html>

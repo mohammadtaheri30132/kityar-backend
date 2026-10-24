@@ -12,6 +12,12 @@ import settingsRoutes from './routes/settings.js'
 import announcementRoutes from './routes/admin.announcement.routes.js'
 import systemEventRoutes from './routes/admin.systemEvent.routes.js'
 import communityRoutes from './routes/admin.community.routes.js'
+import quizRoutes from './routes/admin.quiz.routes.js'
+import musicRoutes from './routes/admin.music.routes.js'
+import phonebookRoutes from './routes/admin.phonebook.routes.js'
+import notificationRoutes from './routes/admin.notification.routes.js'
+import supportRoutes from './routes/admin.support.routes.js'
+import kitayarRoutes from './routes/admin.kitayar.routes.js'
 
 const adminRouter = Router()
 
@@ -27,5 +33,11 @@ adminRouter.use('/questions', questionRoutes)
 adminRouter.use('/settings', settingsRoutes)
 adminRouter.use('/announcements', announcementRoutes)
 adminRouter.use('/system-events', systemEventRoutes)
+adminRouter.use('/quiz', quizRoutes)
+adminRouter.use('/music', musicRoutes)
+adminRouter.use('/phonebook', phonebookRoutes)
+adminRouter.use('/notifications', notificationRoutes)
+adminRouter.use('/support', supportRoutes)
+adminRouter.use('/kitayar', kitayarRoutes)
 
 export default adminRouter

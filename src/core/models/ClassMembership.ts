@@ -12,6 +12,7 @@ export interface IClassMembership extends Document {
   specialNotes?: string
   status: 'ACTIVE' | 'PENDING' | 'UNMATCHED' | 'ARCHIVED'
   source: 'MANUAL' | 'EXAM_LINK' | 'INVITATION'
+  isVerified: boolean // تیک آبی: دانش‌آموزان ثبت‌نامی از وب که معلم تایید کرده است
   joinedAt: Date
 }
 
@@ -28,6 +29,7 @@ const classMembershipSchema = new Schema<IClassMembership>(
     specialNotes: { type: String },
     status: { type: String, enum: ['ACTIVE', 'PENDING', 'UNMATCHED', 'ARCHIVED'], default: 'ACTIVE' },
     source: { type: String, enum: ['MANUAL', 'EXAM_LINK', 'INVITATION'], default: 'MANUAL' },
+    isVerified: { type: Boolean, default: false },
     joinedAt: { type: Date, default: Date.now }
   },
   { timestamps: true }

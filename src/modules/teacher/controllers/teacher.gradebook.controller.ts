@@ -27,8 +27,8 @@ export const getGradebookRecords = async (req: Request | any, res: Response) => 
     }
 
     // Get Students
-    console.log(`Fetching memberships for classId: ${classroomId}`);
-    const memberships = await ClassMembership.find({ classId: classroomId }).populate({
+    console.log(`Fetching active memberships for classId: ${classroomId}`);
+    const memberships = await ClassMembership.find({ classId: classroomId, status: 'ACTIVE' }).populate({
         path: 'studentId',
         populate: { path: 'user', select: 'fullName' }
     });
@@ -43,7 +43,8 @@ export const getGradebookRecords = async (req: Request | any, res: Response) => 
       return {
         _id: m.studentPhone,
         name: name,
-        phone: m.studentPhone
+        phone: m.studentPhone,
+        isVerified: !!m.isVerified
       };
     });
     

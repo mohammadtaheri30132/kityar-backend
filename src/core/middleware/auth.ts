@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 import { User, IUser } from '../models/User.js'
+import { StudentProfile } from '../models/StudentProfile.js'
+import { TeacherProfile } from '../models/TeacherProfile.js'
 import { logger } from '../utils/logger.js'
 
 export interface AuthRequest extends Request {
@@ -50,7 +52,7 @@ export const protect = async (
     const targetId = decoded.userId || decoded.id
 
     if (!targetId) {
-       res.status(401).json({
+      res.status(401).json({
         success: false,
         message: '⛔ ساختار توکن نامعتبر است',
         error: 'INVALID_TOKEN_PAYLOAD',
@@ -81,10 +83,10 @@ export const protect = async (
 
     // کاربر با موفقیت احراز هویت شد
     req.user = user
-    
-    // در کنترلرهای جدید، گاهی از identifier استفاده کرده بودیم، 
-    // با این خط مطمئن می‌شویم که مقادیر مورد نیاز در req به درستی ست شده‌اند
-    ;(req as any).user.identifier = user.username 
+
+      // در کنترلرهای جدید، گاهی از identifier استفاده کرده بودیم، 
+      // با این خط مطمئن می‌شویم که مقادیر مورد نیاز در req به درستی ست شده‌اند
+      ; (req as any).user.identifier = user.username
 
     next()
   } catch (error: any) {
@@ -150,18 +152,25 @@ export const teacherOnly = (
   }
 }
 
-export const studentOnly = (
+export const studentOnly = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
-): void => {
-  if (req.user && req.user.role === 'student') {
-    next()
-  } else {
-    res.status(403).json({
-      success: false,
-      message: '⛔ فقط دانش‌آموز به این بخش دسترسی دارد',
-      error: 'STUDENT_ONLY',
-    })
+): Promise<void> => {
+  if (req.user && (req.user.role === 'student' || (req as any).tokenRole === 'student')) {
+    next();
+    return;
   }
-}
+  if (req.user) {
+    const sp = await StudentProfile.findOne({ user: req.user._id });
+    if (sp) {
+      next();
+      return;
+    }
+  }
+  res.status(403).json({
+    success: false,
+    message: '⛔ فقط دانش‌آموز به این بخش دسترسی دارد',
+    error: 'STUDENT_ONLY',
+  });
+};

@@ -16,6 +16,10 @@ import announcementRoutes from './routes/teacher.announcement.routes.js'
 import systemEventRoutes from './routes/teacher.systemEvent.routes.js'
 import formRoutes from './routes/teacher.form.routes.js'
 import communityRoutes from './routes/teacher.community.routes.js'
+import homeworkRoutes from './routes/teacher.homework.routes.js'
+import notificationRoutes from './routes/teacher.notification.routes.js'
+import smartSheetRoutes from './routes/teacher.smartsheet.routes.js'
+import supportRoutes from './routes/teacher.support.routes.js'
 
 const teacherRouter = Router()
 
@@ -33,7 +37,11 @@ teacherRouter.use('/notes', noteRoutes)
 teacherRouter.use('/schools', schoolRoutes)
 teacherRouter.use('/classes', classRoutes)
 teacherRouter.use('/schedule', scheduleRoutes)
+teacherRouter.use('/homeworks', homeworkRoutes)
 teacherRouter.use('/announcements', announcementRoutes)
 teacherRouter.use('/system-events', systemEventRoutes)
+teacherRouter.use('/notifications', notificationRoutes)
+teacherRouter.use('/smart-sheets', smartSheetRoutes)
+teacherRouter.use('/support', supportRoutes)
 
 export default teacherRouter
