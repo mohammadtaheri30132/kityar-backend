@@ -9,7 +9,9 @@ export interface IUser extends Document {
   firstName?: string
   lastName?: string
   fatherName?: string
+  avatar?: string
   role: 'admin' | 'teacher' | 'student'
+  roles?: string[]
   isActive: boolean
   lastLogin: Date | null
   comparePassword(candidatePassword: string): Promise<boolean>
@@ -43,10 +45,17 @@ const userSchema = new Schema<IUser>(
     firstName: { type: String, trim: true },
     lastName: { type: String, trim: true },
     fatherName: { type: String, trim: true },
+    avatar: { type: String, default: '' },
     role: {
       type: String,
       enum: ['admin', 'teacher','student'],
       default: 'teacher',
+    },
+    roles: {
+      type: [String],
+      default: function(this: any) {
+        return this.role ? [this.role] : ['teacher'];
+      },
     },
     isActive: {
       type: Boolean,

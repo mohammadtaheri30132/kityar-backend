@@ -58,6 +58,16 @@ export const getProfile = async (req: Request, res: Response): Promise<void> => 
     // شمارش پست‌های منتشر شده در بخش تعامل
     const postsCount = await CommunityPost.countDocuments({ author: userId, isDeleted: false })
 
+    // ۳. شمارش کل افراد دعوت‌شده به سیستم (از طریق لینک آزمون، کلاس‌ها و کدهای دعوت)
+    const { StudentProfile } = await import('../../../core/models/StudentProfile.js')
+    const invitedCount = await StudentProfile.countDocuments({
+      $or: [
+        { invitedBy: profile!._id },
+        { invitedBy: userId },
+        { invitedByStudent: userId },
+      ],
+    })
+
     // محاسبه سابقه کار بر اساس تاریخ‌های سوابق تدریس یا فیلد ثبت شده
     let calculatedExpYears = profile!.experienceYears || 0
     if (calculatedExpYears === 0 && profile!.resume?.experiences?.length > 0) {
@@ -66,12 +76,16 @@ export const getProfile = async (req: Request, res: Response): Promise<void> => 
 
     res.status(200).json({
       success: true,
-      data: profile,
+      data: {
+        ...profile!.toObject(),
+        invitedCount,
+      },
       stats: {
         classesCount,
         studentsCount,
         postsCount,
         experienceYears: calculatedExpYears,
+        invitedCount,
       },
     })
   } catch (error: any) {

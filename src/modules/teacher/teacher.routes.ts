@@ -20,9 +20,11 @@ import homeworkRoutes from './routes/teacher.homework.routes.js'
 import notificationRoutes from './routes/teacher.notification.routes.js'
 import smartSheetRoutes from './routes/teacher.smartsheet.routes.js'
 import supportRoutes from './routes/teacher.support.routes.js'
+import centerRoutes from './routes/teacher.center.routes.js'
 
 const teacherRouter = Router()
 
+teacherRouter.use('/center', centerRoutes)
 teacherRouter.use('/community', communityRoutes)
 teacherRouter.use('/forms', formRoutes)
 teacherRouter.use('/exams', examRoutes)

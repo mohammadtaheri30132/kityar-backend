@@ -2,6 +2,8 @@ import { Request, Response } from 'express';
 import { ClassMessage, MessageType, RecipientScope } from '../../core/models/ClassMessage.js';
 import { Classroom } from '../../core/models/Classroom.js';
 import { ClassMembership } from '../../core/models/ClassMembership.js';
+import { Conversation } from '../../core/models/Conversation.js';
+import { Message } from '../../core/models/Message.js';
 import { NotificationService } from '../../core/services/notificationService.js';
 import { logger } from '../../core/utils/logger.js';
 
@@ -254,4 +256,102 @@ export class ChatController {
       return res.status(500).json({ success: false, message: 'خطا در حذف پیام' });
     }
   }
+
+  /**
+   * لیست گفتگوهای کاربر (معلم یا دانش‌آموز)
+   */
+  static async getConversations(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?._id;
+      const conversations = await Conversation.find({
+        participants: userId,
+        isActive: true,
+      })
+        .populate('participants', 'fullName phoneNumber avatar role')
+        .populate('questionRequestId', 'title status price')
+        .sort({ lastMessageAt: -1 });
+
+      return res.json({ success: true, data: conversations });
+    } catch (error: any) {
+      logger.error('Error in getConversations:', error);
+      return res.status(500).json({ success: false, message: 'خطا در دریافت گفتگوها' });
+    }
+  }
+
+  /**
+   * دریافت پیام‌های یک گفتگوی اختصاصی یا سوال
+   */
+  static async getConversationMessages(req: Request, res: Response) {
+    try {
+      const { conversationId } = req.params;
+      const userId = (req as any).user?._id;
+
+      const conversation = await Conversation.findOne({
+        _id: conversationId,
+        participants: userId,
+      });
+
+      if (!conversation) {
+        return res.status(404).json({ success: false, message: 'گفتگو یافت نشد' });
+      }
+
+      const messages = await Message.find({ conversationId })
+        .populate('senderId', 'fullName avatar role')
+        .sort({ createdAt: 1 });
+
+      return res.json({ success: true, data: messages });
+    } catch (error: any) {
+      logger.error('Error in getConversationMessages:', error);
+      return res.status(500).json({ success: false, message: 'خطا در دریافت پیام‌ها' });
+    }
+  }
+
+  /**
+   * ارسال پیام در گفتگوی اختصاصی
+   */
+  static async sendConversationMessage(req: Request, res: Response) {
+    try {
+      const { conversationId } = req.params;
+      const userId = (req as any).user?._id;
+      const { content, type, mediaUrl, mediaDuration, fileSize, fileName } = req.body;
+
+      const conversation = await Conversation.findOne({
+        _id: conversationId,
+        participants: userId,
+      });
+
+      if (!conversation) {
+        return res.status(404).json({ success: false, message: 'گفتگو یافت نشد' });
+      }
+
+      const message = await Message.create({
+        conversationId,
+        senderId: userId,
+        content: content || '',
+        type: type || 'text',
+        mediaUrl: mediaUrl || '',
+        mediaDuration: Number(mediaDuration) || 0,
+        fileSize: Number(fileSize) || 0,
+        fileName: fileName || '',
+        status: 'sent',
+      });
+
+      // Update conversation last message preview
+      let previewText = content;
+      if (type === 'voice') previewText = '🎙 پیام صوتی';
+      else if (type === 'image') previewText = '📷 تصویر';
+      else if (type === 'file') previewText = '📎 فایل پیوست';
+
+      conversation.lastMessage = previewText;
+      conversation.lastMessageAt = new Date();
+      conversation.lastMessageSender = userId;
+      await conversation.save();
+
+      return res.status(201).json({ success: true, data: message });
+    } catch (error: any) {
+      logger.error('Error in sendConversationMessage:', error);
+      return res.status(500).json({ success: false, message: 'خطا در ارسال پیام' });
+    }
+  }
 }
+

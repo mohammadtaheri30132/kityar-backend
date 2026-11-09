@@ -18,8 +18,9 @@ router.post('/contacts', protect, adminOnly, phonebookCtrl.createContact);
 router.put('/contacts/:id', protect, adminOnly, phonebookCtrl.updateContact);
 router.delete('/contacts/:id', protect, adminOnly, phonebookCtrl.deleteContact);
 
-// Batch & Excel Import (handles both file upload and parsed JSON)
+// Batch, Excel & JSON Import (handles both file upload and direct JSON payload)
 router.post('/import-excel', protect, adminOnly, upload.single('file'), phonebookCtrl.importExcel);
+router.post('/import-json', protect, adminOnly, upload.single('file'), phonebookCtrl.importJson);
 
 // Seeding
 router.post('/seed-defaults', protect, adminOnly, phonebookCtrl.seedDefaults);

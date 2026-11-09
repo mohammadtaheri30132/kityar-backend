@@ -7,6 +7,8 @@ export interface ICourse extends Document {
   order: number
   isActive: boolean
   totalQuestions: number
+  image?: string | null
+  color?: string | null
 }
 
 const courseSchema = new Schema<ICourse>(
@@ -40,6 +42,16 @@ const courseSchema = new Schema<ICourse>(
     totalQuestions: {
       type: Number,
       default: 0,
+    },
+    image: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    color: {
+      type: String,
+      trim: true,
+      default: null,
     },
   },
   {

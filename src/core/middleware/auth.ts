@@ -83,10 +83,8 @@ export const protect = async (
 
     // کاربر با موفقیت احراز هویت شد
     req.user = user
-
-      // در کنترلرهای جدید، گاهی از identifier استفاده کرده بودیم، 
-      // با این خط مطمئن می‌شویم که مقادیر مورد نیاز در req به درستی ست شده‌اند
-      ; (req as any).user.identifier = user.username
+    ;(req as any).tokenRole = decoded.role
+    ;(req as any).user.identifier = user.username
 
     next()
   } catch (error: any) {
@@ -136,28 +134,45 @@ export const adminOnly = (
 }
 
 // میدلورهای جدید برای اپلیکیشن
-export const teacherOnly = (
+export const teacherOnly = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
-): void => {
-  if (req.user && req.user.role === 'teacher') {
-    next()
-  } else {
-    res.status(403).json({
-      success: false,
-      message: '⛔ فقط معلم به این بخش دسترسی دارد',
-      error: 'TEACHER_ONLY',
-    })
+): Promise<void> => {
+  if (
+    req.user &&
+    (req.user.role === 'teacher' ||
+      req.user.roles?.includes('teacher') ||
+      (req as any).tokenRole === 'teacher')
+  ) {
+    next();
+    return;
   }
-}
+  if (req.user) {
+    const tp = await TeacherProfile.findOne({ user: req.user._id });
+    if (tp) {
+      next();
+      return;
+    }
+  }
+  res.status(403).json({
+    success: false,
+    message: '⛔ فقط معلم به این بخش دسترسی دارد',
+    error: 'TEACHER_ONLY',
+  });
+};
 
 export const studentOnly = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  if (req.user && (req.user.role === 'student' || (req as any).tokenRole === 'student')) {
+  if (
+    req.user &&
+    (req.user.role === 'student' ||
+      req.user.roles?.includes('student') ||
+      (req as any).tokenRole === 'student')
+  ) {
     next();
     return;
   }

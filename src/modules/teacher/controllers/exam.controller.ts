@@ -35,7 +35,8 @@ export const createExam = async (req: Request, res: Response): Promise<void> => 
       randomizeQuestions,
       deliveryMode,
       allowBackNavigation,
-      isUntimed
+      isUntimed,
+      requireAppOnly,
     } = req.body
 
     // ۱. اعتبارسنجی‌های اولیه
@@ -75,6 +76,7 @@ export const createExam = async (req: Request, res: Response): Promise<void> => 
       randomizeQuestions,
       deliveryMode,
       allowBackNavigation,
+      requireAppOnly: !!requireAppOnly,
       isActive: true, // آزمون در ابتدا فعال است
     })
 
@@ -117,6 +119,7 @@ export const createInitialExam = async (req: Request, res: Response): Promise<vo
       randomizeQuestions,
       deliveryMode,
       allowBackNavigation,
+      requireAppOnly,
     } = req.body
 
     // ۱. بررسی دسترسی معلم
@@ -161,6 +164,7 @@ export const createInitialExam = async (req: Request, res: Response): Promise<vo
       randomizeQuestions,
       deliveryMode,
       allowBackNavigation,
+      requireAppOnly: !!requireAppOnly,
       isActive: true,
     })
 
@@ -170,7 +174,14 @@ export const createInitialExam = async (req: Request, res: Response): Promise<vo
       success: true,
       message: 'تنظیمات اولیه آزمون با موفقیت ذخیره شد. حالا سوالات را اضافه کنید.',
       data: {
-        examId: newExam._id, // این آیدی برای مرحله دوم استفاده می‌شود
+        examId: newExam._id,
+        _id: newExam._id,
+        id: newExam._id,
+        title: newExam.title,
+        requireAppOnly: !!newExam.requireAppOnly,
+        startTime: newExam.startTime,
+        endTime: newExam.endTime,
+        totalScore: newExam.totalScore,
       },
     })
   } catch (error: any) {

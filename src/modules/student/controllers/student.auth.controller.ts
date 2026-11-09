@@ -171,10 +171,11 @@ export const requestExamJoinOtp = async (req: Request, res: Response): Promise<v
 export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<void> => {
   try {
     const { examId } = req.params;
-    const { phoneNumber, otp, firstName, lastName, fatherName, fullName } = req.body;
+    const { phoneNumber, otp, code, firstName, lastName, fatherName, fullName, name } = req.body;
+    const actualOtp = otp || code;
 
     // ۱. بررسی کد تایید
-    if (otp !== '12345') {
+    if (actualOtp !== '12345') {
       res.status(400).json({ success: false, message: 'کد تایید وارد شده اشتباه است.' });
       return;
     }
@@ -190,7 +191,7 @@ export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<vo
       $or: [{ phoneNumber: phoneNumber }, { username: phoneNumber }]
     });
 
-    const computedFullName = fullName || (firstName && lastName ? `${firstName} ${lastName}` : null);
+    const computedFullName = fullName || name || (firstName && lastName ? `${firstName} ${lastName}` : null) || 'دانش‌آموز';
 
     if (!user) {
       // ساخت کاربر جدید
@@ -252,6 +253,10 @@ export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<vo
         });
         await studentProfile.save();
       }
+    } else if (!studentProfile.invitedBy && exam.teacher) {
+      // در صورتی که قبلاً پروفایل داشته ولی دعوت‌کننده‌ای برایش ثبت نشده باشد
+      studentProfile.invitedBy = exam.teacher;
+      await studentProfile.save();
     }
 
     // ۴. افزودن به لیست مجاز آزمون
@@ -266,10 +271,47 @@ export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<vo
     res.status(200).json({
       success: true,
       message: 'ورود موفقیت‌آمیز بود',
-      data: { token, examId: exam._id }
+      data: {
+        token,
+        examId: exam._id,
+        title: exam.title,
+        requireAppOnly: !!exam.requireAppOnly,
+      }
     });
   } catch (error: any) {
     logger.error('❌ خطا در تایید کد و ورود:', error);
     res.status(500).json({ success: false, message: 'خطای سرور در تایید کد' });
+  }
+};
+
+/**
+ * دریافت اطلاعات اولیه آزمون جهت نمایش به دانش‌آموز قبل از ورود
+ */
+export const getExamJoinInfo = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { examId } = req.params;
+    const exam = await Exam.findById(examId).populate('teacher', 'fullName user');
+    if (!exam) {
+      res.status(404).json({ success: false, message: 'آزمون یافت نشد' });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        examId: exam._id,
+        title: exam.title,
+        description: exam.description,
+        startTime: exam.startTime,
+        endTime: exam.endTime,
+        totalScore: exam.totalScore,
+        questionsCount: exam.questions?.length || 0,
+        requireAppOnly: !!exam.requireAppOnly,
+        teacherName: (exam.teacher as any)?.fullName || 'معلم آزمون',
+      },
+    });
+  } catch (error: any) {
+    logger.error('Error fetching exam join info:', error);
+    res.status(500).json({ success: false, message: 'خطای سرور' });
   }
 };

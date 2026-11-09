@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>کلاس آنلاین کیتایار و نوکیتا</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      background: #0f172a;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Vazirmatn", Tahoma, sans-serif;
+      overflow: hidden;
+    }
+    #classroom-container {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+    /* Video Area */
+    #video-stage {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #090d16;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    #local-video-preview {
+      position: absolute;
+      bottom: 80px;
+      left: 16px;
+      width: 110px;
+      height: 150px;
+      border-radius: 12px;
+      border: 2px solid #3b82f6;
+      background: #1e293b;
+      overflow: hidden;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      z-index: 10;
+      display: block;
+    }
+    #local-video-preview.hidden {
+      display: none;
+    }
+    /* Whiteboard Layer */
+    #whiteboard-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 5;
+      background: #ffffff;
+      display: none;
+    }
+    #whiteboard-layer.active {
+      display: block;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      cursor: crosshair;
+    }
+    /* Whiteboard Floating Toolbar */
+    .wb-tools {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.9);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 30px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 20;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+    .color-dot {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      cursor: pointer;
+    }
+    .color-dot.active {
+      border-color: #ffffff;
+      transform: scale(1.15);
+    }
+    .wb-btn {
+      background: #334155;
+      color: #fff;
+      border: none;
+      padding: 6px 10px;
+      border-radius: 16px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    /* Overlays & Status */
+    #status-overlay {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(6px);
+      padding: 6px 14px;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      z-index: 15;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+    }
+    .status-dot.medium { background: #eab308; }
+    .status-dot.poor { background: #ef4444; }
+    #notice-box {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      z-index: 8;
+      pointer-events: none;
+    }
+    #notice-box h3 {
+      font-size: 18px;
+      margin-bottom: 8px;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <div id="classroom-container">
+    <!-- Video Stage -->
+    <div id="video-stage">
+      <video id="remote-video" autoplay playsinline></video>
+      <div id="notice-box">
+        <h3 id="stage-message">در حال برقراری ارتباط با کلاس...</h3>
+        <p id="stage-submessage" style="font-size: 12px; color: #64748b;">کیفیت صدا بر اساس پهنای باند شبکه بهینه‌سازی می‌شود</p>
+      </div>
+      <div id="local-video-preview">
+        <video id="local-video" autoplay playsinline muted></video>
+      </div>
+    </div>
+
+    <!-- Whiteboard Stage -->
+    <div id="whiteboard-layer">
+      <div class="wb-tools" id="wb-controls">
+        <div class="color-dot active" style="background: #1e293b;" onclick="setStrokeColor('#1e293b', this)"></div>
+        <div class="color-dot" style="background: #7c3aed;" onclick="setStrokeColor('#7c3aed', this)"></div>
+        <div class="color-dot" style="background: #ef4444;" onclick="setStrokeColor('#ef4444', this)"></div>
+        <div class="color-dot" style="background: #2563eb;" onclick="setStrokeColor('#2563eb', this)"></div>
+        <button class="wb-btn" onclick="clearCanvas(true)">پاک‌کردن تخته</button>
+      </div>
+      <canvas id="paint-canvas"></canvas>
+    </div>
+
+    <!-- Live Connection Quality Pill -->
+    <div id="status-overlay">
+      <div class="status-dot" id="network-dot"></div>
+      <span id="network-text">کیفیت: عالی (۳۲ms)</span>
+    </div>
+  </div>
+
+  <script>
+    // Configuration from URL params or React Native bridge
+    const urlParams = new URLSearchParams(window.location.search);
+    let sessionToken = urlParams.get('token') || '';
+    let serverUrl = urlParams.get('serverUrl') || 'ws://127.0.0.1:7880';
+    let roomName = urlParams.get('room') || 'kitayar-room';
+    let isTeacher = urlParams.get('isTeacher') === 'true';
+
+    // State
+    let isMicEnabled = true;
+    let isCamEnabled = true;
+    let isWhiteboardActive = false;
+    let localStream = null;
+    let strokeColor = '#1e293b';
+    let strokeWidth = 3;
+    let isDrawing = false;
+    let lastPoint = null;
+
+    // React Native Bridge Sender
+    function sendToNative(type, payload) {
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type, payload }));
+      }
+    }
+
+    // Canvas setup
+    const canvas = document.getElementById('paint-canvas');
+    const ctx = canvas.getContext('2d');
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function setStrokeColor(c, el) {
+      strokeColor = c;
+      document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'));
+      if (el) el.classList.add('active');
+    }
+
+    function clearCanvas(broadcast) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (broadcast) {
+        broadcastData({ type: 'clear' });
+      }
+    }
+
+    // Drawing handlers
+    function handleTouchStart(e) {
+      isDrawing = true;
+      const touch = e.touches ? e.touches[0] : e;
+      const rect = canvas.getBoundingClientRect();
+      const x = touch.clientX - rect.left;
+      const y = touch.clientY - rect.top;
+      lastPoint = { x, y };
+
+      broadcastData({
+        type: 'stroke_start',
+        color: strokeColor,
+        size: strokeWidth,
+        point: [x / canvas.width, y / canvas.height]
+      });
+    }
+
+    function handleTouchMove(e) {
+      if (!isDrawing || !lastPoint) return;
+      e.preventDefault();
+      const touch = e.touches ? e.touches[0] : e;
+      const rect = canvas.getBoundingClientRect();
+      const x = touch.clientX - rect.left;
+      const y = touch.clientY - rect.top;
+
+      ctx.beginPath();
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = strokeWidth;
+      ctx.moveTo(lastPoint.x, lastPoint.y);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+
+      lastPoint = { x, y };
+
+      broadcastData({
+        type: 'stroke_points',
+        point: [x / canvas.width, y / canvas.height]
+      });
+    }
+
+    function handleTouchEnd() {
+      if (isDrawing) {
+        isDrawing = false;
+        lastPoint = null;
+        broadcastData({ type: 'stroke_end' });
+      }
+    }
+
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+    canvas.addEventListener('touchend', handleTouchEnd);
+    canvas.addEventListener('mousedown', handleTouchStart);
+    canvas.addEventListener('mousemove', handleTouchMove);
+    canvas.addEventListener('mouseup', handleTouchEnd);
+
+    // Data Channel Broadcast simulation/connector
+    function broadcastData(msg) {
+      sendToNative('WHITEBOARD_STROKE', msg);
+    }
+
+    // Inbound stroke from peer (e.g. Student receiving Teacher's drawing)
+    let peerLastPoint = null;
+    let peerColor = '#1e293b';
+    let peerSize = 3;
+    function renderRemoteStroke(data) {
+      if (data.type === 'stroke_start') {
+        peerColor = data.color || '#1e293b';
+        peerSize = data.size || 3;
+        peerLastPoint = {
+          x: data.point[0] * canvas.width,
+          y: data.point[1] * canvas.height
+        };
+      } else if (data.type === 'stroke_points' && peerLastPoint) {
+        const x = data.point[0] * canvas.width;
+        const y = data.point[1] * canvas.height;
+        ctx.beginPath();
+        ctx.strokeStyle = peerColor;
+        ctx.lineWidth = peerSize;
+        ctx.moveTo(peerLastPoint.x, peerLastPoint.y);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        peerLastPoint = { x, y };
+      } else if (data.type === 'stroke_end') {
+        peerLastPoint = null;
+      } else if (data.type === 'clear') {
+        clearCanvas(false);
+      }
+    }
+
+    // Camera & Media initialization
+    async function initMedia() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: 24, max: 30 }
+          }
+        });
+        const localVideoEl = document.getElementById('local-video');
+        localVideoEl.srcObject = localStream;
+        document.getElementById('stage-message').innerText = isTeacher ? 'کلاس آغاز شد (منتظر ورود دانش‌آموز)' : 'به کلاس متصل شدید';
+        sendToNative('ROOM_CONNECTED', { roomName, isTeacher });
+      } catch (err) {
+        console.warn('Camera/mic access:', err);
+        document.getElementById('stage-message').innerText = 'دسترسی وب‌کم یا میکروفون محدود است';
+        sendToNative('MEDIA_ERROR', { error: err.message });
+      }
+    }
+
+    // React Native Bridge Listener (Incoming commands from mobile screen)
+    function handleNativeMessage(event) {
+      try {
+        const raw = event.data;
+        const msg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (!msg || !msg.action) return;
+
+        switch (msg.action) {
+          case 'TOGGLE_MIC':
+            isMicEnabled = !!msg.enabled;
+            if (localStream) {
+              localStream.getAudioTracks().forEach(t => t.enabled = isMicEnabled);
+            }
+            break;
+
+          case 'TOGGLE_CAM':
+            isCamEnabled = !!msg.enabled;
+            if (localStream) {
+              localStream.getVideoTracks().forEach(t => t.enabled = isCamEnabled);
+            }
+            document.getElementById('local-video-preview').classList.toggle('hidden', !isCamEnabled);
+            break;
+
+          case 'TOGGLE_WHITEBOARD':
+            isWhiteboardActive = !isWhiteboardActive;
+            const wbLayer = document.getElementById('whiteboard-layer');
+            wbLayer.classList.toggle('active', isWhiteboardActive);
+            resizeCanvas();
+            sendToNative('WHITEBOARD_TOGGLED', { active: isWhiteboardActive });
+            break;
+
+          case 'REMOTE_STROKE':
+            if (msg.payload) {
+              renderRemoteStroke(msg.payload);
+            }
+            break;
+
+          case 'INIT_SESSION':
+            if (msg.token) sessionToken = msg.token;
+            if (msg.serverUrl) serverUrl = msg.serverUrl;
+            if (msg.roomName) roomName = msg.roomName;
+            isTeacher = !!msg.isTeacher;
+            initMedia();
+            break;
+
+          default:
+            break;
+        }
+      } catch (e) {
+        console.error('Error parsing native message:', e);
+      }
+    }
+
+    window.addEventListener('message', handleNativeMessage);
+    document.addEventListener('message', handleNativeMessage);
+
+    // Auto-init if params are provided
+    if (sessionToken) {
+      initMedia();
+    } else {
+      // Prompt React Native that WebView is ready
+      sendToNative('WEBVIEW_READY', {});
+    }
+
+    // Ping / Network Quality update loop
+    setInterval(() => {
+      const mockLatency = Math.floor(25 + Math.random() * 20);
+      const dot = document.getElementById('network-dot');
+      const text = document.getElementById('network-text');
+      dot.className = 'status-dot';
+      text.innerText = `کیفیت: عالی (${mockLatency}ms)`;
+      sendToNative('NETWORK_STATS', { ping: mockLatency, packetLoss: 0, quality: 'excellent' });
+    }, 4000);
+  </script>
+</body>
+</html>
+

@@ -1,4 +1,5 @@
 import express from 'express'
+import http from 'http'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import path from 'path'
@@ -9,6 +10,7 @@ import { connectDB } from './core/config/database.js'
 import { requestLogger } from './core/middleware/requestLogger.js'
 import { errorHandler } from './core/middleware/errorHandler.js'
 import { logger } from './core/utils/logger'
+import { NativeSignalingServer } from './modules/classroom/native/ws/NativeSignalingServer.js'
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 // ==================== Modules Imports ====================
@@ -22,7 +24,10 @@ import publicClassroomRoutes from './modules/public/routes/public.classroom.rout
 import publicRankEstimateRoutes from './modules/public/routes/public.rankEstimate.routes.js';
 import publicMusicRoutes from './modules/public/routes/public.music.routes.js';
 import publicPhonebookRoutes from './modules/public/routes/public.phonebook.routes.js';
+import publicNokitaRoutes from './modules/public/routes/public.nokita.routes.js';
 import chatRoutes from './modules/chat/chat.routes.js';
+import classroomRoutes from './modules/classroom/classroom.routes.js';
+import authRoutes from './modules/auth/auth.routes.js';
 import { backfillClassroomCodes } from './modules/teacher/controllers/teacher.classroom.controller.js';
 dotenv.config()
 
@@ -100,11 +105,14 @@ app.use('/api/public/classroom', publicClassroomRoutes);
 app.use('/api/public/rank-estimate', publicRankEstimateRoutes);
 app.use('/api/public/music', publicMusicRoutes);
 app.use('/api/public/phonebook', publicPhonebookRoutes);
+app.use('/api/public/nokita', publicNokitaRoutes);
 app.use('/api/admin', adminRoutes)
 app.use('/api/teacher', teacherRoutes)
 app.use('/api/student', studentRoutes)
 app.use('/api/student/auth', studentAuthRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/classroom', classroomRoutes);
 // فردا روزی که بخش موبایل رو ساختی، فقط کافیه این دو خط رو از کامنت دربیاری:
 // import mobileRoutes from './modules/mobile/mobile.routes.js'
 // app.use('/api/mobile', mobileRoutes)
@@ -117,7 +125,10 @@ const startServer = async () => {
   try {
     await connectDB()
     await backfillClassroomCodes()
-    app.listen(PORT, () => {
+    const server = http.createServer(app)
+    NativeSignalingServer.init(server)
+
+    server.listen(PORT, () => {
       logger.info(`🚀 سرور روی پورت ${PORT} در حال اجراست`)
       logger.info(`📍 آدرس: http://localhost:${PORT}`)
       logger.info(`🔗 کلاینت: ${allowedOrigins.join(', ')}`)

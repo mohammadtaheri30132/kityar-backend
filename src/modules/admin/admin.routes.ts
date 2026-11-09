@@ -18,12 +18,17 @@ import phonebookRoutes from './routes/admin.phonebook.routes.js'
 import notificationRoutes from './routes/admin.notification.routes.js'
 import supportRoutes from './routes/admin.support.routes.js'
 import kitayarRoutes from './routes/admin.kitayar.routes.js'
+import walletRoutes from './routes/admin.wallet.routes.js'
+import blogRoutes from './routes/admin.blog.routes.js'
+import landingToolsRoutes from './routes/admin.landingTools.routes.js'
+import nokitaRoutes from './routes/admin.nokita.routes.js'
 
 const adminRouter = Router()
 
 // دقت کن که اینجا دیگه پیشوند /api/auth نداریم، فقط /auth
 adminRouter.use('/auth', authRoutes)
 adminRouter.use('/dashboard', dashboardRoutes)
+adminRouter.use('/wallets', walletRoutes)
 adminRouter.use('/community', communityRoutes)
 adminRouter.use('/courses', courseRoutes)
 adminRouter.use('/fields', fieldRoutes)
@@ -39,5 +44,8 @@ adminRouter.use('/phonebook', phonebookRoutes)
 adminRouter.use('/notifications', notificationRoutes)
 adminRouter.use('/support', supportRoutes)
 adminRouter.use('/kitayar', kitayarRoutes)
+adminRouter.use('/blog', blogRoutes)
+adminRouter.use('/landing-tools', landingToolsRoutes)
+adminRouter.use('/nokita', nokitaRoutes)
 
 export default adminRouter

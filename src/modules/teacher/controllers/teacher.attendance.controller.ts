@@ -1,4 +1,5 @@
 import { Request, Response } from 'express'
+import mongoose from 'mongoose'
 import { ClassSession } from '../../../core/models/ClassSession.js'
 import { AttendanceRecord } from '../../../core/models/AttendanceRecord.js'
 import { ClassMembership } from '../../../core/models/ClassMembership.js'
@@ -110,23 +111,37 @@ export const getSessionAttendance = async (req: Request, res: Response): Promise
 export const saveSessionAttendance = async (req: Request, res: Response): Promise<void> => {
   try {
     const { classroomId, sessionId } = req.params
-    const { attendanceData } = req.body // Array of { studentPhone, status, reason }
+    const { attendanceData, date, subject } = req.body // Array of { studentPhone, status, reason }
 
-    for (const record of attendanceData) {
-      await AttendanceRecord.updateOne(
-        { sessionId, studentPhone: record.studentPhone },
-        { 
-          $set: { 
-            classId: classroomId,
-            status: record.status,
-            reason: record.reason
-          } 
-        },
-        { upsert: true }
+    let actualSessionId = sessionId
+    if (!sessionId || sessionId === 'today' || sessionId === 'new' || !mongoose.Types.ObjectId.isValid(String(sessionId))) {
+      const sessionDate = date || new Date().toISOString().split('T')[0]
+      const teacherId = (req as any).user?.id || (req as any).user?._id
+      const session = await ClassSession.findOneAndUpdate(
+        { classId: classroomId, date: sessionDate },
+        { $setOnInsert: { teacherId, subject: subject || 'عمومی', status: 'COMPLETED' } },
+        { upsert: true, new: true }
       )
+      actualSessionId = session._id.toString()
     }
 
-    await ClassSession.findByIdAndUpdate(sessionId, { status: 'COMPLETED' })
+    if (Array.isArray(attendanceData)) {
+      for (const record of attendanceData) {
+        await AttendanceRecord.updateOne(
+          { sessionId: actualSessionId, studentPhone: record.studentPhone },
+          { 
+            $set: { 
+              classId: classroomId,
+              status: record.status || 'PRESENT',
+              reason: record.reason || ''
+            } 
+          },
+          { upsert: true }
+        )
+      }
+    }
+
+    await ClassSession.findByIdAndUpdate(actualSessionId, { status: 'COMPLETED' })
 
     res.json({ success: true, message: 'حضور و غیاب با موفقیت ثبت شد' })
   } catch (error) {

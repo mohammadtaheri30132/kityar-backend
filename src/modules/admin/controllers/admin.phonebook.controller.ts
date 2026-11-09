@@ -341,18 +341,204 @@ export const deleteContact = async (req: Request, res: Response) => {
   }
 };
 
-// =================== Excel Import & Batch ===================
+// =================== Unified Import Engine (JSON & Excel) ===================
+
+interface ProcessImportResult {
+  importedCount: number;
+  createdCategoryCount: number;
+  skippedCount: number;
+}
+
+export const processPhonebookImport = async (
+  rawData: any,
+  targetCategoryId?: string
+): Promise<ProcessImportResult> => {
+  let defaultCategory: any = null;
+  if (targetCategoryId) {
+    defaultCategory = await PhonebookCategory.findById(targetCategoryId);
+  }
+  if (!defaultCategory) {
+    defaultCategory = await PhonebookCategory.findOne({ parentId: null }).sort({ order: 1 });
+    if (!defaultCategory) {
+      defaultCategory = await PhonebookCategory.create({
+        title: 'عمومی',
+        icon: 'phone',
+        color: '#3b82f6',
+        order: 0,
+      });
+    }
+  }
+
+  const categoryCache = new Map<string, mongoose.Types.ObjectId>();
+  let importedCount = 0;
+  let createdCategoryCount = 0;
+  let skippedCount = 0;
+
+  // Helper to ensure category exists
+  const getOrCreateCategory = async (
+    title: string,
+    parentId: mongoose.Types.ObjectId | null = null,
+    icon = 'folder',
+    color = '#0284c7',
+    isEmergency = false
+  ): Promise<mongoose.Types.ObjectId> => {
+    const trimmed = String(title).trim();
+    const cacheKey = `${parentId ? parentId.toString() : 'root'}__${trimmed}`;
+    if (categoryCache.has(cacheKey)) {
+      return categoryCache.get(cacheKey)!;
+    }
+
+    let found = await PhonebookCategory.findOne({ title: trimmed, parentId });
+    if (!found) {
+      found = await PhonebookCategory.create({
+        title: trimmed,
+        parentId,
+        icon: icon || (parentId ? 'phone' : 'folder'),
+        color: color || (parentId ? '#6366f1' : '#0284c7'),
+        isEmergency: Boolean(isEmergency),
+      });
+      createdCategoryCount++;
+    }
+    const catId = found._id as mongoose.Types.ObjectId;
+    categoryCache.set(cacheKey, catId);
+    return catId;
+  };
+
+  // Helper to insert a single contact row
+  const insertContact = async (row: any, fallbackCatId: mongoose.Types.ObjectId) => {
+    const title =
+      row['title'] || row['عنوان'] || row['نام'] || row['نام و نام خانوادگی'] || row['Title'] || row['Name'] || row['name'];
+    const phone =
+      row['phoneNumber'] || row['شماره'] || row['تلفن'] || row['شماره تماس'] || row['Phone'] || row['phone'] || row['tel'];
+    const phoneSecondary =
+      row['phoneSecondary'] || row['شماره دوم'] || row['تلفن همراه'] || row['موبایل'] || row['Mobile'] || row['mobile'] || '';
+    const internalNumber =
+      row['internalNumber'] || row['داخلی'] || row['Internal'] || row['internal'] || '';
+    const categoryName =
+      row['category'] || row['دسته‌بندی'] || row['دسته'] || row['گروه'] || row['Category'];
+    const subcategoryName =
+      row['subcategory'] || row['زیردسته'] || row['Subcategory'];
+    const department =
+      row['department'] || row['بخش'] || row['واحد'] || row['اداره'] || row['Department'] || '';
+    const responsiblePerson =
+      row['responsiblePerson'] || row['مسئول'] || row['پاسخگو'] || row['Responsible'] || '';
+    const city =
+      row['city'] || row['شهر'] || row['استان'] || row['منطقه'] || row['City'] || '';
+    const address =
+      row['address'] || row['آدرس'] || row['نشانی'] || row['Address'] || '';
+    const description =
+      row['description'] || row['توضیحات'] || row['یادداشت'] || row['Description'] || '';
+    const isEmergency =
+      row['isEmergency'] === true ||
+      row['اضطراری'] === 'بله' ||
+      row['اضطراری'] === true ||
+      row['emergency'] === true;
+
+    if (!title || !phone) {
+      skippedCount++;
+      return;
+    }
+
+    let contactCatId = fallbackCatId;
+
+    if (categoryName && typeof categoryName === 'string' && categoryName.trim()) {
+      const parentCatId = await getOrCreateCategory(categoryName, null, 'folder', '#0284c7');
+      contactCatId = parentCatId;
+
+      if (subcategoryName && typeof subcategoryName === 'string' && subcategoryName.trim()) {
+        const subCatId = await getOrCreateCategory(subcategoryName, parentCatId, 'phone', '#6366f1');
+        contactCatId = subCatId;
+      }
+    }
+
+    await PhonebookContact.create({
+      title: String(title).trim(),
+      phoneNumber: String(phone).trim(),
+      phoneSecondary: phoneSecondary ? String(phoneSecondary).trim() : '',
+      internalNumber: internalNumber ? String(internalNumber).trim() : '',
+      categoryId: contactCatId,
+      department: department ? String(department).trim() : '',
+      responsiblePerson: responsiblePerson ? String(responsiblePerson).trim() : '',
+      city: city ? String(city).trim() : '',
+      address: address ? String(address).trim() : '',
+      description: description ? String(description).trim() : '',
+      isEmergency: Boolean(isEmergency),
+      isActive: true,
+      order: typeof row['order'] === 'number' ? row['order'] : 0,
+    });
+
+    importedCount++;
+  };
+
+  // Case A: Nested Categories Structure [{ title, contacts: [...], subcategories: [...] }]
+  const processCategoriesTree = async (catsList: any[], parentId: mongoose.Types.ObjectId | null = null) => {
+    for (const cat of catsList) {
+      if (!cat.title) continue;
+      const catId = await getOrCreateCategory(
+        cat.title,
+        parentId,
+        cat.icon || (parentId ? 'phone' : 'folder'),
+        cat.color || (parentId ? '#6366f1' : '#0284c7'),
+        Boolean(cat.isEmergency)
+      );
+
+      // Process direct contacts in this category
+      if (Array.isArray(cat.contacts)) {
+        for (const c of cat.contacts) {
+          await insertContact(c, catId);
+        }
+      }
+
+      // Process nested subcategories
+      const subcats = cat.subcategories || cat.children;
+      if (Array.isArray(subcats) && subcats.length > 0) {
+        await processCategoriesTree(subcats, catId);
+      }
+    }
+  };
+
+  // Discern payload type
+  if (Array.isArray(rawData)) {
+    // Check if it's an array of categories with nested contacts
+    const firstItem = rawData[0];
+    if (firstItem && (Array.isArray(firstItem.contacts) || Array.isArray(firstItem.subcategories) || Array.isArray(firstItem.children))) {
+      await processCategoriesTree(rawData);
+    } else {
+      // Flat list of contacts
+      for (const row of rawData) {
+        await insertContact(row, defaultCategory._id);
+      }
+    }
+  } else if (rawData && typeof rawData === 'object') {
+    if (Array.isArray(rawData.categories)) {
+      await processCategoriesTree(rawData.categories);
+    } else if (Array.isArray(rawData.contacts)) {
+      for (const row of rawData.contacts) {
+        await insertContact(row, defaultCategory._id);
+      }
+    } else if (Array.isArray(rawData.items)) {
+      for (const row of rawData.items) {
+        await insertContact(row, defaultCategory._id);
+      }
+    } else {
+      // Single contact object
+      await insertContact(rawData, defaultCategory._id);
+    }
+  }
+
+  return { importedCount, createdCategoryCount, skippedCount };
+};
+
+// =================== Excel Import Endpoint ===================
 
 export const importExcel = async (req: Request, res: Response) => {
   try {
     let rows: any[] = [];
-    const targetCategoryId = req.body.targetCategoryId;
+    const targetCategoryId = req.body?.targetCategoryId;
 
-    // 1. If JSON array passed directly from frontend client-side parsed Excel
-    if (Array.isArray(req.body.items) && req.body.items.length > 0) {
+    if (Array.isArray(req.body?.items) && req.body.items.length > 0) {
       rows = req.body.items;
     } else if (req.file) {
-      // 2. If uploaded as multipart file
       const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
       const firstSheet = workbook.SheetNames[0];
       rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet]);
@@ -364,115 +550,65 @@ export const importExcel = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'فایل یا داده ارسالی خالی است' });
     }
 
-    let defaultCategory: any = null;
-    if (targetCategoryId) {
-      defaultCategory = await PhonebookCategory.findById(targetCategoryId);
-    }
-    if (!defaultCategory) {
-      defaultCategory = await PhonebookCategory.findOne({ parentId: null }).sort({ order: 1 });
-      if (!defaultCategory) {
-        defaultCategory = await PhonebookCategory.create({
-          title: 'عمومی',
-          icon: 'phone',
-          color: '#3b82f6',
-        });
-      }
-    }
-
-    // Category cache map by name to avoid redundant DB queries
-    const categoryCache = new Map<string, mongoose.Types.ObjectId>();
-
-    let importedCount = 0;
-    let createdCategoryCount = 0;
-
-    for (const row of rows) {
-      // Support Persian, English, and common column variants
-      const title = row['عنوان'] || row['نام'] || row['نام و نام خانوادگی'] || row['Title'] || row['Name'] || row['title'] || row['name'];
-      const phone = row['شماره'] || row['تلفن'] || row['شماره تماس'] || row['Phone'] || row['phone'] || row['phoneNumber'];
-      const phoneSecondary = row['شماره دوم'] || row['تلفن همراه'] || row['موبایل'] || row['Mobile'] || row['phoneSecondary'] || '';
-      const internalNumber = row['داخلی'] || row['Internal'] || row['internal'] || '';
-      const categoryName = row['دسته‌بندی'] || row['دسته'] || row['گروه'] || row['Category'] || row['category'];
-      const subcategoryName = row['زیردسته'] || row['Subcategory'] || row['subcategory'];
-      const department = row['بخش'] || row['واحد'] || row['اداره'] || row['Department'] || row['department'] || '';
-      const responsiblePerson = row['مسئول'] || row['پاسخگو'] || row['Responsible'] || row['responsible'] || '';
-      const city = row['شهر'] || row['استان'] || row['منطقه'] || row['City'] || row['city'] || '';
-      const description = row['توضیحات'] || row['یادداشت'] || row['Description'] || row['description'] || '';
-      const isEmergency = row['اضطراری'] === 'بله' || row['اضطراری'] === true || row['Emergency'] === true || row['emergency'] === true;
-
-      if (!title || !phone) continue;
-
-      let contactCatId = defaultCategory._id;
-
-      // Handle category & subcategory from row if provided
-      if (categoryName && typeof categoryName === 'string' && categoryName.trim()) {
-        const catTrimmed = categoryName.trim();
-        let parentCatId = categoryCache.get(catTrimmed);
-
-        if (!parentCatId) {
-          let foundParent = await PhonebookCategory.findOne({ title: catTrimmed, parentId: null });
-          if (!foundParent) {
-            foundParent = await PhonebookCategory.create({
-              title: catTrimmed,
-              icon: 'folder',
-              color: '#0284c7',
-            });
-            createdCategoryCount++;
-          }
-          parentCatId = foundParent._id as mongoose.Types.ObjectId;
-          categoryCache.set(catTrimmed, parentCatId);
-        }
-
-        contactCatId = parentCatId;
-
-        // If subcategory is also specified
-        if (subcategoryName && typeof subcategoryName === 'string' && subcategoryName.trim()) {
-          const subTrimmed = subcategoryName.trim();
-          const subCacheKey = `${catTrimmed}__${subTrimmed}`;
-          let subCatId = categoryCache.get(subCacheKey);
-
-          if (!subCatId) {
-            let foundSub = await PhonebookCategory.findOne({ title: subTrimmed, parentId: parentCatId });
-            if (!foundSub) {
-              foundSub = await PhonebookCategory.create({
-                title: subTrimmed,
-                parentId: parentCatId,
-                icon: 'phone',
-                color: '#6366f1',
-              });
-              createdCategoryCount++;
-            }
-            subCatId = foundSub._id as mongoose.Types.ObjectId;
-            categoryCache.set(subCacheKey, subCatId);
-          }
-          contactCatId = subCatId;
-        }
-      }
-
-      await PhonebookContact.create({
-        title: String(title).trim(),
-        phoneNumber: String(phone).trim(),
-        phoneSecondary: phoneSecondary ? String(phoneSecondary).trim() : '',
-        internalNumber: internalNumber ? String(internalNumber).trim() : '',
-        categoryId: contactCatId,
-        department: department ? String(department).trim() : '',
-        responsiblePerson: responsiblePerson ? String(responsiblePerson).trim() : '',
-        city: city ? String(city).trim() : '',
-        description: description ? String(description).trim() : '',
-        isEmergency: Boolean(isEmergency),
-        isActive: true,
-      });
-
-      importedCount++;
-    }
+    const result = await processPhonebookImport(rows, targetCategoryId);
 
     res.json({
       success: true,
-      message: `${importedCount} شماره تلفن با موفقیت ذخیره شد (${createdCategoryCount} دسته‌بندی جدید ایجاد شد)`,
-      importedCount,
-      createdCategoryCount,
+      message: `${result.importedCount} شماره تلفن با موفقیت ذخیره شد (${result.createdCategoryCount} دسته‌بندی جدید ایجاد شد)`,
+      ...result,
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message || 'خطا در بارگذاری اطلاعات اکسل' });
+  }
+};
+
+// =================== JSON Import Endpoint ===================
+
+export const importJson = async (req: Request, res: Response) => {
+  try {
+    let rawData: any = null;
+    const targetCategoryId = req.body?.targetCategoryId;
+
+    if (req.file) {
+      const fileText = req.file.buffer.toString('utf-8');
+      try {
+        rawData = JSON.parse(fileText);
+      } catch (err: any) {
+        return res.status(400).json({ success: false, message: 'فایل ارسالی حاوی فرمت JSON معتبر نیست: ' + err.message });
+      }
+    } else if (req.body) {
+      if (typeof req.body.jsonText === 'string') {
+        try {
+          rawData = JSON.parse(req.body.jsonText);
+        } catch (err: any) {
+          return res.status(400).json({ success: false, message: 'متن ارسالی حاوی فرمت JSON معتبر نیست' });
+        }
+      } else if (Array.isArray(req.body.items)) {
+        rawData = req.body.items;
+      } else if (Array.isArray(req.body.contacts)) {
+        rawData = req.body.contacts;
+      } else if (Array.isArray(req.body.categories)) {
+        rawData = req.body.categories;
+      } else if (Array.isArray(req.body)) {
+        rawData = req.body;
+      } else {
+        rawData = req.body;
+      }
+    }
+
+    if (!rawData) {
+      return res.status(400).json({ success: false, message: 'هیچ داده JSON برای وارد کردن ارسال نشده است' });
+    }
+
+    const result = await processPhonebookImport(rawData, targetCategoryId);
+
+    res.json({
+      success: true,
+      message: `${result.importedCount} شماره تلفن با موفقیت ثبت شد (${result.createdCategoryCount} دسته‌بندی ایجاد شد)`,
+      ...result,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || 'خطا در پردازش و ذخیره داده‌های JSON' });
   }
 };
 

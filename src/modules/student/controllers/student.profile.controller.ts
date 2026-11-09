@@ -89,6 +89,7 @@ export const getStudentProfile = async (req: Request, res: Response): Promise<vo
         totalExamsCount,
         inviteCode: studentProfile.inviteCode,
         invitedStudentsCount,
+        invitedCount: invitedStudentsCount,
         hasInvitedBy: !!studentProfile.invitedByStudent,
         weeklySchedule: studentProfile.weeklySchedule || [],
       },

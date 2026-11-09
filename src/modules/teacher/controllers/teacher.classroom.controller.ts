@@ -12,9 +12,25 @@ import { GradebookRecord } from '../../../core/models/GradebookRecord.js'
 import { logger } from '../../../core/utils/logger.js'
 import { checkStudentNameSimilarity } from '../../../core/utils/studentMatcher.js'
 
-// دریافت پروفایل معلم (تابع کمکی برای استفاده در کنترلرها)
+import mongoose, { Types } from 'mongoose'
+
+// دریافت یا ایجاد پروفایل معلم (تابع کمکی برای استفاده در کنترلرها)
 const getTeacherProfile = async (userId: string) => {
-  return await TeacherProfile.findOne({ user: userId })
+  if (!userId) return null
+  let profile = await TeacherProfile.findOne({ user: userId })
+  if (!profile) {
+    try {
+      profile = await TeacherProfile.create({ user: userId })
+    } catch (e) {
+      profile = await TeacherProfile.findOne({ user: userId })
+    }
+  }
+  return profile
+}
+
+const isValidObjectId = (val: any): boolean => {
+  if (!val || typeof val !== 'string') return false
+  return mongoose.Types.ObjectId.isValid(val) && String(new mongoose.Types.ObjectId(val)) === val
 }
 
 /**
@@ -22,8 +38,8 @@ const getTeacherProfile = async (userId: string) => {
  */
 export const createClassroom = async (req: Request, res: Response): Promise<void> => {
   try {
-    const userId = (req as any).user?.id
-    const { name, course, grade, subjectName, gradeName, description, academicYear, schoolId } = req.body
+    const userId = (req as any).user?.id || (req as any).user?._id
+    let { name, course, grade, subjectName, gradeName, description, academicYear, schoolId } = req.body
 
     if (!name) {
       res.status(400).json({ success: false, message: 'نام کلاس الزامی است' })
@@ -34,6 +50,19 @@ export const createClassroom = async (req: Request, res: Response): Promise<void
     if (!teacher) {
       res.status(403).json({ success: false, message: 'پروفایل معلم یافت نشد' })
       return
+    }
+
+    // اگر پایه یا درس به صورت متنی (مثلا "نهم" یا "ریاضی") ارسال شده باشد نه ObjectId
+    if (grade && !isValidObjectId(grade)) {
+      gradeName = gradeName || grade
+      grade = undefined
+    }
+    if (course && !isValidObjectId(course)) {
+      subjectName = subjectName || course
+      course = undefined
+    }
+    if (schoolId && !isValidObjectId(schoolId)) {
+      schoolId = undefined
     }
 
     const code = await generateUniqueClassCode()
@@ -222,7 +251,7 @@ export const addStudentsToClassroom = async (req: Request, res: Response): Promi
     }
 
     // استخراج شماره موبایل‌ها برای Classroom
-    const phones = students.map((s: any) => typeof s === 'string' ? s : s.phone).filter(Boolean);
+    const phones = students.map((s: any) => typeof s === 'string' ? s : (s.phone || s.studentPhone)).filter(Boolean);
 
     const teacher = await getTeacherProfile(userId)
     
@@ -240,7 +269,7 @@ export const addStudentsToClassroom = async (req: Request, res: Response): Promi
 
     // ساخت رکورد ClassMembership برای هر دانش‌آموز
     for (const studentData of students) {
-      const phone = typeof studentData === 'string' ? studentData : studentData.phone;
+      const phone = typeof studentData === 'string' ? studentData : (studentData.phone || studentData.studentPhone);
       if (!phone) continue;
 
       const firstName = typeof studentData === 'string' ? undefined : studentData.firstName;

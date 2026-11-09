@@ -1,5 +1,6 @@
 import { Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
+import jwt from 'jsonwebtoken'
 import { Classroom } from '../../../core/models/Classroom.js'
 import { ClassMembership } from '../../../core/models/ClassMembership.js'
 import { User } from '../../../core/models/User.js'
@@ -247,7 +248,7 @@ export const registerStudentInClassroom = async (req: Request, res: Response): P
       }
     }
 
-    // ۲. ایجاد یا به‌روزرسانی ClassMembership با وضعیت PENDING (در انتظار تایید معلم)
+    // ۲. ایجاد یا به‌روزرسانی ClassMembership با وضعیت ACTIVE (ورود معتبر با لینک دعوت معلم)
     let membership = await ClassMembership.findOne({
       classId: classroom._id,
       studentPhone: phone,
@@ -264,9 +265,9 @@ export const registerStudentInClassroom = async (req: Request, res: Response): P
         parentPhone: parentPhone?.trim() || undefined,
         birthDate: birthDate?.trim() || undefined,
         specialNotes: specialNotes?.trim() || undefined,
-        status: 'PENDING',
+        status: 'ACTIVE',
         source: 'INVITATION',
-        isVerified: false,
+        isVerified: true,
         joinedAt: new Date(),
       })
       await membership.save()
@@ -278,10 +279,15 @@ export const registerStudentInClassroom = async (req: Request, res: Response): P
       if (parentPhone) membership.parentPhone = parentPhone.trim()
       if (birthDate) membership.birthDate = birthDate.trim()
       if (specialNotes) membership.specialNotes = specialNotes.trim()
-      membership.status = 'PENDING'
+      membership.status = 'ACTIVE'
       membership.source = 'INVITATION'
-      membership.isVerified = false
+      membership.isVerified = true
       await membership.save()
+    }
+
+    if (!classroom.students.includes(phone)) {
+      classroom.students.push(phone)
+      await classroom.save()
     }
 
     // استخراج نام معلم برای پیام موفقیت
@@ -295,13 +301,20 @@ export const registerStudentInClassroom = async (req: Request, res: Response): P
 
     logger.info(`📥 درخواست عضویت جدید از دانش‌آموز ${firstName} ${lastName} (${phone}) برای کلاس ${classroom.name} (کد: ${code}) ثبت شد.`)
 
+    const secret = process.env.JWT_SECRET || 'your_super_secret_key'
+    const token = jwt.sign({ id: user._id.toString(), identifier: phone, role: 'student' }, secret, { expiresIn: '30d' })
+
     res.status(200).json({
       success: true,
-      message: 'درخواست عضویت شما با موفقیت ثبت شد و پس از تایید معلم فعال خواهد شد.',
+      message: 'عضویت شما در کلاس با موفقیت انجام شد.',
+      token,
       data: {
+        token,
+        classId: classroom._id,
         className: classroom.name,
         teacherName,
         student: {
+          _id: user._id,
           firstName: firstName.trim(),
           lastName: lastName.trim(),
           phone,
@@ -313,7 +326,6 @@ export const registerStudentInClassroom = async (req: Request, res: Response): P
           directApkUrl: 'https://kitayar.ir/download/nokita.apk',
           bazaarUrl: 'https://cafebazaar.ir/app/com.kitayar.nokita',
           myketUrl: 'https://myket.ir/app/com.kitayar.nokita',
-          webAppUrl: 'https://nokita.kitayar.ir',
         },
       },
     })

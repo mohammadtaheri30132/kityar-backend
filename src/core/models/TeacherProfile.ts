@@ -59,6 +59,18 @@ export interface ITeacherProfile extends Document {
   experienceYears?: number
   resume: ITeacherResume
   isActive: boolean
+  availabilityStatus: 'online' | 'offline' | 'busy' | 'available_for_questions'
+  lastHeartbeat?: Date
+  acceptingQuestions: boolean
+  questionFee: number
+  hourlyRate: number
+  rating: number
+  ratingsCount: number
+  rankingScore: number
+  onlineClassBasePrice?: number
+  onlineClassDurations?: Record<string, boolean>
+  teachingSubjects?: string[]
+  teachingGrades?: string[]
 }
 
 const experienceSchema = new Schema(
@@ -180,6 +192,66 @@ const teacherProfileSchema = new Schema<ITeacherProfile>(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    availabilityStatus: {
+      type: String,
+      enum: ['online', 'offline', 'busy', 'available_for_questions'],
+      default: 'offline',
+    },
+    lastHeartbeat: {
+      type: Date,
+      default: null,
+    },
+    acceptingQuestions: {
+      type: Boolean,
+      default: true,
+    },
+    questionFee: {
+      type: Number,
+      default: 0,
+    },
+    hourlyRate: {
+      type: Number,
+      default: 0,
+    },
+    rating: {
+      type: Number,
+      default: 5.0,
+      min: 1,
+      max: 5,
+    },
+    ratingsCount: {
+      type: Number,
+      default: 0,
+    },
+    rankingScore: {
+      type: Number,
+      default: 100,
+    },
+    onlineClassBasePrice: {
+      type: Number,
+      default: 500000,
+      min: 0,
+    },
+    onlineClassDurations: {
+      type: Map,
+      of: Boolean,
+      default: () => ({
+        '15': true,
+        '30': true,
+        '45': true,
+        '60': true,
+        '75': true,
+        '90': true,
+      }),
+    },
+    teachingSubjects: {
+      type: [String],
+      default: [],
+    },
+    teachingGrades: {
+      type: [String],
+      default: [],
     },
   },
   { timestamps: true }

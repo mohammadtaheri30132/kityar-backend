@@ -53,4 +53,9 @@ router.get('/classrooms/:classId/messages', ChatController.getMessages);
 router.post('/classrooms/:classId/messages', ChatController.sendMessage);
 router.delete('/classrooms/:classId/messages/:messageId', ChatController.deleteMessage);
 
+// گفتگوهای اختصاصی و رفع اشکال
+router.get('/conversations', ChatController.getConversations);
+router.get('/conversations/:conversationId/messages', ChatController.getConversationMessages);
+router.post('/conversations/:conversationId/messages', ChatController.sendConversationMessage);
+
 export default router;

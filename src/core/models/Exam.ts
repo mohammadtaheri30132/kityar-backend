@@ -23,6 +23,7 @@ export interface IExam extends Document {
   deliveryMode: 'all_at_once' | 'one_by_one' // ارسال یکجا یا تکی
   allowBackNavigation: boolean // قابل بازگشت بودن سوال (فقط در حالت تکی کاربرد دارد)
   questionsCount?: number // تعداد سوالات
+  requireAppOnly?: boolean // الزام به برگزاری آزمون صرفاً از طریق اپلیکیشن نوکیتا
 }
 
 const examSchema = new Schema<IExam>(
@@ -63,6 +64,7 @@ const examSchema = new Schema<IExam>(
       default: 'all_at_once' 
     },
     allowBackNavigation: { type: Boolean, default: true },
+    requireAppOnly: { type: Boolean, default: false },
   },
   { timestamps: true }
 )
