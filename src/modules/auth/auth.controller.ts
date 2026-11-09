@@ -195,6 +195,8 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
     const {
       phoneNumber,
       fullName,
+      firstName,
+      lastName,
       avatar,
       password,
       otp,
@@ -204,7 +206,12 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
       teachingGrade,
     } = req.body;
 
-    if (!phoneNumber || !fullName) {
+    const determinedFullName =
+      (fullName && fullName.trim()) ||
+      ((firstName || lastName) ? `${firstName || ''} ${lastName || ''}`.trim() : '') ||
+      '';
+
+    if (!phoneNumber || !determinedFullName) {
       res.status(400).json({ success: false, message: 'شماره تلفن و نام و نام‌خانوادگی الزامی است' });
       return;
     }
@@ -239,7 +246,9 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
       user = new User({
         username: cleanPhone,
         phoneNumber: cleanPhone,
-        fullName: fullName.trim(),
+        fullName: determinedFullName,
+        firstName: firstName ? firstName.trim() : undefined,
+        lastName: lastName ? lastName.trim() : undefined,
         avatar: avatar || '',
         password: effectivePassword,
         role: targetRole,
@@ -249,9 +258,11 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
       await user.save();
     } else {
       // کاربر از قبل با نقش دیگر وجود دارد -> بروزرسانی نام و عکس و افزودن نقش جدید
-      if (fullName) user.fullName = fullName.trim();
+      if (determinedFullName) user.fullName = determinedFullName;
+      if (firstName) user.firstName = firstName.trim();
+      if (lastName) user.lastName = lastName.trim();
       if (avatar) user.avatar = avatar;
-      if (password) user.password = effectivePassword;
+      if (password && password.toString().trim().length >= 4) user.password = effectivePassword;
 
       const currentRoles: string[] = user.roles && user.roles.length > 0 ? user.roles : [user.role || 'teacher'];
       if (!currentRoles.includes(targetRole)) {

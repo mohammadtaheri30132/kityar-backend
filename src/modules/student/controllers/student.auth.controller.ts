@@ -5,6 +5,7 @@ import { logger } from '../../../core/utils/logger.js'
 import { StudentProfile } from '../../../core/models/StudentProfile.js'
 import { ClassMembership } from '../../../core/models/ClassMembership.js'
 import { Exam } from '../../../core/models/Exam.js'
+import { SmsService } from '../../../core/services/sms.service.js'
 
 // تابع کمکی تبدیل اعداد فارسی و عربی به انگلیسی
 const normalizeDigits = (str: string): string => {
@@ -24,82 +25,155 @@ const generateToken = (userId: string, identifier: string): string => {
 }
 
 /**
- * گام اول: ارسال کد تایید (OTP) به شماره موبایل دانش‌آموز
+ * گام اول: ارسال کد تایید (OTP) به شماره موبایل دانش‌آموز از طریق کاوه‌نگار
  */
 export const requestOtp = async (req: Request, res: Response): Promise<void> => {
   try {
-    let { phoneNumber } = req.body
+    const rawPhone = req.body.phoneNumber || req.body.phone;
 
-    if (!phoneNumber) {
-      res.status(400).json({ success: false, message: 'شماره موبایل الزامی است' })
-      return
+    if (!rawPhone) {
+      res.status(400).json({ success: false, message: 'شماره تلفن همراه الزامی است' });
+      return;
     }
 
-    phoneNumber = normalizeDigits(phoneNumber.toString().trim())
-    const otp = generateMockOtp()
-    logger.info(`📲 [MOCK OTP] ارسال کد تایید شبیه‌سازی‌شده برای شماره ${phoneNumber}: ${otp}`)
+    const cleanPhone = SmsService.normalizePhone(rawPhone);
+
+    if (cleanPhone.length !== 11 || !cleanPhone.startsWith('09')) {
+      res.status(400).json({ success: false, message: 'شماره تلفن همراه معتبر نیست (باید ۱۱ رقم و با ۰۹ شروع شود)' });
+      return;
+    }
+
+    const remaining = SmsService.getRemainingSeconds(cleanPhone);
+    if (remaining > 0) {
+      res.status(429).json({
+        success: false,
+        rateLimited: true,
+        remainingSeconds: remaining,
+        message: `کد تایید اخیراً ارسال شده است. لطفاً ${remaining} ثانیه دیگر مجدداً تلاش فرمایید.`,
+      });
+      return;
+    }
+
+    const smsResult = await SmsService.sendOtp(cleanPhone);
+    if (!smsResult.success) {
+      const status = smsResult.rateLimited ? 429 : 502;
+      res.status(status).json({
+        success: false,
+        rateLimited: smsResult.rateLimited,
+        remainingSeconds: smsResult.remainingSeconds,
+        message: smsResult.message || 'خطا در ارسال پیامک کد تایید کاوه‌نگار',
+      });
+      return;
+    }
 
     res.status(200).json({
       success: true,
-      message: 'کد تایید شبیه‌سازی‌شده ارسال شد (کد تستی: ۱۲۳۴۵)',
+      remainingSeconds: smsResult.remainingSeconds || 120,
+      message: smsResult.message || 'کد تایید با موفقیت پیامک شد.',
       data: {
-        otp, // برای شبیه‌سازی در محیط کلاینت
-        mockOtp: otp,
+        phoneNumber: cleanPhone,
+        remainingSeconds: smsResult.remainingSeconds || 120,
+        ...(smsResult.otp ? { otp: smsResult.otp, mockOtp: smsResult.otp } : {}),
       },
-    })
+    });
   } catch (error: any) {
-    logger.error('❌ خطا در ارسال OTP دانش‌آموز:', error)
-    res.status(500).json({ success: false, message: 'خطای سرور' })
+    logger.error('❌ خطا در ارسال OTP دانش‌آموز:', error);
+    res.status(500).json({ success: false, message: 'خطای سرور در ارسال پیامک' });
   }
-}
+};
 
 /**
  * گام دوم: تایید OTP و ورود یا ثبت‌نام خودکار دانش‌آموز
  */
 export const verifyOtpAndLogin = async (req: Request, res: Response): Promise<void> => {
   try {
-    let { phoneNumber, fullName } = req.body
-    let rawOtp = req.body.otp || req.body.code
+    const { phoneNumber, firstName, lastName, fullName, avatar, password } = req.body;
+    let rawOtp = req.body.otp || req.body.code;
 
     if (!phoneNumber || !rawOtp) {
-      res.status(400).json({ success: false, message: 'شماره موبایل و کد تایید الزامی است' })
-      return
+      res.status(400).json({ success: false, message: 'شماره موبایل و کد تایید الزامی است' });
+      return;
     }
 
-    phoneNumber = normalizeDigits(phoneNumber.toString().trim())
-    rawOtp = normalizeDigits(rawOtp.toString().trim())
+    const cleanPhone = SmsService.normalizePhone(phoneNumber);
+    rawOtp = normalizeDigits(rawOtp.toString().trim());
 
-    // صحت‌سنجی کد تایید شبیه‌سازی‌شده (پذیرش کد ثابت ۱۲۳۴۵ و ۱۲۳۴)
-    if (rawOtp !== '12345' && rawOtp !== '1234') {
-      res.status(400).json({ success: false, message: 'کد تایید وارد شده اشتباه است (کد تستی: ۱۲۳۴۵)' })
-      return
+    // صحت‌سنجی کد تایید
+    const isValid = SmsService.verifyOtp(cleanPhone, rawOtp);
+    if (!isValid) {
+      res.status(400).json({ success: false, message: 'کد تایید وارد شده نادرست یا منقضی شده است' });
+      return;
     }
+
+    // نام تعیین شده
+    const determinedName =
+      (fullName && fullName.trim()) ||
+      ((firstName || lastName) ? `${firstName || ''} ${lastName || ''}`.trim() : null);
 
     // بررسی اینکه آیا این دانش‌آموز قبلاً ثبت‌نام کرده است یا خیر
     let user = await User.findOne({
-      $or: [{ username: phoneNumber }, { phoneNumber }],
-    })
+      $or: [{ username: cleanPhone }, { phoneNumber: cleanPhone }],
+    }).select('+password');
 
     if (!user) {
       // بررسی آیا در عضویتی اطلاعات نام دانش‌آموز وجود دارد
-      const prevMembership = await ClassMembership.findOne({ studentPhone: phoneNumber }).sort({ createdAt: -1 });
-      const determinedName = fullName || (prevMembership ? `${prevMembership.firstName || ''} ${prevMembership.lastName || ''}`.trim() : null) || 'دانش‌آموز نوکیتا';
+      const prevMembership = await ClassMembership.findOne({ studentPhone: cleanPhone }).sort({ createdAt: -1 });
+      const finalName = determinedName || (prevMembership ? `${prevMembership.firstName || ''} ${prevMembership.lastName || ''}`.trim() : null) || 'دانش‌آموز نوکیتا';
+
+      // رمز عبور پیش‌فرض یا تعیین‌شده
+      const finalPassword = password && password.toString().trim().length >= 4
+        ? password.toString().trim()
+        : Math.random().toString(36).slice(-8) + 'Nt@2026';
 
       // ایجاد حساب کاربری جدید با نقش دانش‌آموز
       user = new User({
-        username: phoneNumber,
-        phoneNumber: phoneNumber,
-        fullName: determinedName,
+        username: cleanPhone,
+        phoneNumber: cleanPhone,
+        fullName: finalName,
+        firstName: firstName ? firstName.trim() : undefined,
+        lastName: lastName ? lastName.trim() : undefined,
+        avatar: avatar || '',
         role: 'student',
-        password: Math.random().toString(36).slice(-8),
-      })
-      await user.save()
+        roles: ['student'],
+        password: finalPassword,
+        isActive: true,
+      });
+      await user.save();
+    } else {
+      let isUpdated = false;
+      if (firstName && !user.firstName) {
+        user.firstName = firstName.trim();
+        isUpdated = true;
+      }
+      if (lastName && !user.lastName) {
+        user.lastName = lastName.trim();
+        isUpdated = true;
+      }
+      if (determinedName && determinedName !== 'دانش‌آموز نوکیتا' && (!user.fullName || user.fullName === 'دانش‌آموز نوکیتا')) {
+        user.fullName = determinedName;
+        isUpdated = true;
+      }
+      if (avatar && !user.avatar) {
+        user.avatar = avatar;
+        isUpdated = true;
+      }
+      if (password && password.toString().trim().length >= 4) {
+        user.password = password.toString().trim();
+        isUpdated = true;
+      }
+      if (user.role !== 'student' && !user.roles?.includes('student')) {
+        user.roles = [...(user.roles || [user.role]), 'student'];
+        isUpdated = true;
+      }
+      if (isUpdated) {
+        await user.save();
+      }
     }
 
     // اطمینان از وجود پروفایل دانش‌آموز (با پیشگیری از خطای Duplicate studentCode_1 null)
     let studentProfile = await StudentProfile.findOne({ user: user._id });
     if (!studentProfile) {
-      let existingProfileByCode = await StudentProfile.findOne({ studentCode: phoneNumber });
+      let existingProfileByCode = await StudentProfile.findOne({ studentCode: cleanPhone });
       if (existingProfileByCode) {
         existingProfileByCode.user = user._id;
         await existingProfileByCode.save();
@@ -107,18 +181,18 @@ export const verifyOtpAndLogin = async (req: Request, res: Response): Promise<vo
       } else {
         studentProfile = new StudentProfile({
           user: user._id,
-          studentCode: phoneNumber,
+          studentCode: cleanPhone,
         });
         await studentProfile.save();
       }
     }
 
     // بروزرسانی آخرین زمان ورود
-    user.lastLogin = new Date()
-    await user.save()
+    user.lastLogin = new Date();
+    await user.save();
 
     // صدور توکن احراز هویت
-    const token = generateToken(user._id.toString(), user.phoneNumber || user.username)
+    const token = generateToken(user._id.toString(), user.phoneNumber || user.username);
 
     res.status(200).json({
       success: true,
@@ -127,22 +201,26 @@ export const verifyOtpAndLogin = async (req: Request, res: Response): Promise<vo
       data: {
         token,
         fullName: user.fullName,
+        avatar: user.avatar || '',
         isRegistered: true,
         user: {
           _id: user._id,
           phoneNumber: user.phoneNumber || user.username,
           fullName: user.fullName,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          avatar: user.avatar || '',
           role: 'student',
         },
       },
-    })
+    });
   } catch (error: any) {
-    logger.error('❌ خطا در تایید OTP دانش‌آموز:', error)
-    res.status(500).json({ success: false, message: 'خطای سرور' })
+    logger.error('❌ خطا در تایید OTP دانش‌آموز:', error);
+    res.status(500).json({ success: false, message: 'خطای سرور' });
   }
-}
+};
 
-// ۱. مرحله اول: دریافت شماره، بررسی وضعیت و ارسال کد تایید
+// ۱. مرحله اول: دریافت شماره، بررسی وضعیت و ارسال کد تایید با کاوه‌نگار
 export const requestExamJoinOtp = async (req: Request, res: Response): Promise<void> => {
   try {
     const { phoneNumber } = req.body;
@@ -152,16 +230,40 @@ export const requestExamJoinOtp = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    // بررسی اینکه آیا کاربر از قبل در دیتابیس هست یا خیر
-    const user = await User.findOne({ phoneNumber });
-    const isNewUser = !user; // اگر نباشد یعنی کاربر جدید است
+    const cleanPhone = SmsService.normalizePhone(phoneNumber);
+    if (cleanPhone.length !== 11 || !cleanPhone.startsWith('09')) {
+      res.status(400).json({ success: false, message: 'شماره تلفن همراه معتبر نیست.' });
+      return;
+    }
 
-    // 💡 اینجا در سیستم واقعی پیامک ارسال می‌شود، اما فعلا کد ۱۲۳۴۵ فرض می‌شود
+    // بررسی وضعیت کاربر
+    const user = await User.findOne({
+      $or: [{ username: cleanPhone }, { phoneNumber: cleanPhone }],
+    });
+    const isNewUser = !user;
+
+    const remaining = SmsService.getRemainingSeconds(cleanPhone);
+    if (remaining > 0) {
+      res.status(429).json({
+        success: false,
+        message: `کد تایید اخیراً ارسال شده است. لطفاً ${remaining} ثانیه دیگر مجدداً تلاش فرمایید.`,
+      });
+      return;
+    }
+
+    const smsResult = await SmsService.sendOtp(cleanPhone);
+    if (!smsResult.success) {
+      res.status(smsResult.rateLimited ? 429 : 502).json({
+        success: false,
+        message: smsResult.message || 'خطا در ارسال پیامک کد تایید',
+      });
+      return;
+    }
 
     res.status(200).json({
       success: true,
       message: 'کد تایید با موفقیت ارسال شد',
-      data: { isNewUser } // به فرانت‌اند می‌گوییم که آیا فیلد نام را نمایش دهد یا نه
+      data: { isNewUser, remainingSeconds: smsResult.remainingSeconds || 120 }
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: 'خطای سرور' });
@@ -172,11 +274,14 @@ export const verifyExamJoinOtp = async (req: Request, res: Response): Promise<vo
   try {
     const { examId } = req.params;
     const { phoneNumber, otp, code, firstName, lastName, fatherName, fullName, name } = req.body;
-    const actualOtp = otp || code;
+    const actualOtp = (otp || code || '').toString().trim();
 
-    // ۱. بررسی کد تایید
-    if (actualOtp !== '12345') {
-      res.status(400).json({ success: false, message: 'کد تایید وارد شده اشتباه است.' });
+    const cleanPhone = SmsService.normalizePhone(phoneNumber);
+
+    // ۱. بررسی کد تایید با سرویس پیامک
+    const isValid = SmsService.verifyOtp(cleanPhone, actualOtp);
+    if (!isValid) {
+      res.status(400).json({ success: false, message: 'کد تایید وارد شده اشتباه یا منقضی شده است.' });
       return;
     }
 
