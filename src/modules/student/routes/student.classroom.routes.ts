@@ -21,8 +21,9 @@ router.get('/my-exams', getMyExams);
 // جستجوی کلاس با شناسه عددی
 router.get('/search/:code', searchClassByCode);
 
-// ارسال درخواست عضویت در کلاس
+// عضویت مستقیم یا ارسال درخواست عضویت در کلاس
 router.post('/join-request', requestJoinClass);
+router.post('/join', requestJoinClass);
 
 // دریافت گزارشات و کارنامه و حضور و غیاب دانش‌آموز در کلاس
 router.get('/:classroomId/reports', getClassStudentReports);

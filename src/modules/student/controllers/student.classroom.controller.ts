@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { Classroom } from '../../../core/models/Classroom.js';
 import { ClassMembership } from '../../../core/models/ClassMembership.js';
+import { StudentProfile } from '../../../core/models/StudentProfile.js';
 import { AttendanceRecord } from '../../../core/models/AttendanceRecord.js';
 import { GradebookRecord } from '../../../core/models/GradebookRecord.js';
 import { Exam } from '../../../core/models/Exam.js';
@@ -145,26 +146,28 @@ export const requestJoinClass = async (req: Request, res: Response): Promise<voi
 
     if (membership) {
       if (membership.status === 'ACTIVE') {
-        res.status(400).json({
-          success: false,
-          message: 'شما در حال حاضر عضو فعال این کلاس هستید.',
+        res.status(200).json({
+          success: true,
+          message: 'شما در حال حاضر عضو این کلاس هستید.',
+          data: {
+            classId: classroom._id,
+            name: classroom.name,
+            code: classroom.code,
+            status: 'ACTIVE',
+          },
         });
         return;
       }
-      if (membership.status === 'PENDING') {
-        res.status(400).json({
-          success: false,
-          message: 'درخواست عضویت شما قبلاً ارسال شده و در انتظار تایید معلم است.',
-        });
-        return;
-      }
-      membership.status = 'PENDING';
+      membership.status = 'ACTIVE';
+      membership.isVerified = true;
+      if (!membership.firstName && user?.firstName) membership.firstName = user.firstName;
+      if (!membership.lastName && user?.lastName) membership.lastName = user.lastName;
     } else {
       membership = new ClassMembership({
         classId: classroom._id,
         studentPhone,
-        status: 'PENDING',
-        isVerified: false,
+        status: 'ACTIVE',
+        isVerified: true,
         firstName: user?.firstName || '',
         lastName: user?.lastName || '',
         fatherName: user?.fatherName || '',
@@ -173,16 +176,37 @@ export const requestJoinClass = async (req: Request, res: Response): Promise<voi
     }
 
     await membership.save();
-    logger.info(`📥 دانش‌آموز ${studentPhone} درخواست عضویت در کلاس ${classroom.name} (${classroom.code}) ثبت کرد.`);
+
+    // افزودن شماره به لیست دانش‌آموزان کلاس
+    if (!classroom.students.includes(studentPhone)) {
+      classroom.students.push(studentPhone);
+      await classroom.save();
+    }
+
+    // افزودن معلم به پروفایل دانش‌آموز در صورت نیاز
+    try {
+      const studentProfile = await StudentProfile.findOne({ user: user._id });
+      if (studentProfile && classroom.teacher) {
+        const teacherIdStr = classroom.teacher.toString();
+        if (!studentProfile.teachers.some((t: any) => t.toString() === teacherIdStr)) {
+          studentProfile.teachers.push(classroom.teacher as any);
+          await studentProfile.save();
+        }
+      }
+    } catch {
+      // غیربحرانی
+    }
+
+    logger.info(`✅ دانش‌آموز ${studentPhone} مستقیماً در کلاس ${classroom.name} (${classroom.code}) عضو شد.`);
 
     res.status(200).json({
       success: true,
-      message: 'درخواست عضویت شما با موفقیت برای معلم کلاس ارسال شد.',
+      message: 'عضویت شما در کلاس با موفقیت انجام شد.',
       data: {
         classId: classroom._id,
         name: classroom.name,
         code: classroom.code,
-        status: 'PENDING',
+        status: 'ACTIVE',
       },
     });
   } catch (error: any) {
