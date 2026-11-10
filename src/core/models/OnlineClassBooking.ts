@@ -48,16 +48,27 @@ export interface IBookingMeeting {
   password?: string
 }
 
+export interface IBookingReview {
+  rating: number
+  comment?: string
+  voiceUrl?: string
+  isComplaint?: boolean
+  complaintText?: string
+  reviewedAt?: Date
+}
+
 export interface IOnlineClassBooking extends Document {
   bookingCode: string
   studentId: Types.ObjectId
-  teacherId: Types.ObjectId
+  teacherId?: Types.ObjectId
+  targetTeacherIds?: Types.ObjectId[]
   courseId?: Types.ObjectId
   courseName: string
   gradeId?: Types.ObjectId
   gradeName: string
   subjectId?: Types.ObjectId
   subjectName: string
+  educationLevel?: 'elementary' | 'secondary'
   topic: string
   description?: string
   scheduledAt: Date
@@ -67,10 +78,13 @@ export interface IOnlineClassBooking extends Document {
   invitedStudents: IInvitedStudent[]
   pricing: IBookingPricing
   status: ClassBookingStatus
+  cannotCancelBefore?: Date
+  waitingExpiresAt?: Date
   rejectionReason?: string
   cancellationReason?: string
   payment: IBookingPayment
   meeting: IBookingMeeting
+  review?: IBookingReview
   createdAt: Date
   updatedAt: Date
 }
@@ -152,23 +166,26 @@ const onlineClassBookingSchema = new Schema<IOnlineClassBooking>(
     teacherId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
       index: true,
     },
+    targetTeacherIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     courseId: { type: Schema.Types.ObjectId, ref: 'Course' },
     courseName: { type: String, default: '' },
     gradeId: { type: Schema.Types.ObjectId, ref: 'Grade' },
     gradeName: { type: String, default: '' },
     subjectId: { type: Schema.Types.ObjectId, ref: 'Subject' },
     subjectName: { type: String, required: true },
+    educationLevel: { type: String, enum: ['elementary', 'secondary'] },
     topic: { type: String, required: true, trim: true },
     description: { type: String, default: '', trim: true },
     scheduledAt: { type: Date, required: true, index: true },
-    durationMinutes: { type: Number, required: true, enum: [15, 30, 45, 60, 75, 90] },
+    durationMinutes: { type: Number, required: true, default: 90 },
     endTime: { type: Date, required: true },
-    capacity: { type: Number, default: 1, min: 1, max: 10 },
+    capacity: { type: Number, default: 1, min: 1, max: 20 },
     invitedStudents: { type: [invitedStudentSchema], default: [] },
     pricing: { type: pricingSchema, required: true },
+    cannotCancelBefore: { type: Date },
+    waitingExpiresAt: { type: Date },
     status: {
       type: String,
       enum: [
@@ -189,7 +206,15 @@ const onlineClassBookingSchema = new Schema<IOnlineClassBooking>(
     rejectionReason: { type: String, default: '' },
     cancellationReason: { type: String, default: '' },
     payment: { type: paymentSchema, default: () => ({ isPaid: false, trackingCode: '' }) },
-    meeting: { type: meetingSchema, default: () => ({ platform: 'jitsi', meetingLink: '', roomName: '' }) },
+    meeting: { type: meetingSchema, default: () => ({ platform: 'in_app', meetingLink: '', roomName: '' }) },
+    review: {
+      rating: { type: Number, min: 1, max: 5 },
+      comment: { type: String, default: '' },
+      voiceUrl: { type: String },
+      isComplaint: { type: Boolean, default: false },
+      complaintText: { type: String },
+      reviewedAt: { type: Date },
+    },
   },
   { timestamps: true }
 )

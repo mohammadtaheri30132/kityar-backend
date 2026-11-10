@@ -43,6 +43,11 @@ router.post('/class-requests/:id/accept', TeacherOnlineClassController.acceptReq
 router.post('/class-requests/:id/reject', TeacherOnlineClassController.rejectRequest)
 router.post('/class-requests/:id/complete', TeacherOnlineClassController.completeClass)
 
+// Virtual Classroom & Online Class Reservation by Teacher
+router.post('/virtual-classroom', TeacherCenterController.createVirtualClassroom)
+router.post('/reserve-online-class', TeacherCenterController.reserveOnlineClassSession)
+router.put('/workdesk-settings', TeacherCenterController.updateWorkDeskSettings)
+
 // Wallet & Ledger
 router.get('/wallet', TeacherCenterController.getWallet)
 

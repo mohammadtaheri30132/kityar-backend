@@ -75,6 +75,7 @@ export interface SignalingIncomingMessage {
     | 'whiteboard_action'
     | 'chat_message'
     | 'teacher_set_permission'
+    | 'teacher_mute_all'
     | 'teacher_remove_participant'
     | 'teacher_end_room'
     | 'leave_room'

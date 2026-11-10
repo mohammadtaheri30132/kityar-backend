@@ -71,6 +71,8 @@ export interface ITeacherProfile extends Document {
   onlineClassDurations?: Record<string, boolean>
   teachingSubjects?: string[]
   teachingGrades?: string[]
+  educationLevel?: 'elementary' | 'secondary' | 'both'
+  availableSchedule?: { date: string; slots: string[] }[]
 }
 
 const experienceSchema = new Schema(
@@ -253,6 +255,17 @@ const teacherProfileSchema = new Schema<ITeacherProfile>(
       type: [String],
       default: [],
     },
+    educationLevel: {
+      type: String,
+      enum: ['elementary', 'secondary', 'both'],
+      default: 'both',
+    },
+    availableSchedule: [
+      {
+        date: { type: String, required: true },
+        slots: { type: [String], default: [] },
+      },
+    ],
   },
   { timestamps: true }
 )

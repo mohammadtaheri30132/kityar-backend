@@ -12,6 +12,8 @@ export interface ITeacherMaterial extends Document {
   price: number // in Tomans (0 = free)
   coverImageUrl?: string
   previewFileUrl?: string // Demo/sample pages (watermarked or partial)
+  introVideoUrl?: string
+  previewImages?: string[]
   fullFileUrl: string // Full file (stored in protected path)
   fileType: MaterialFileType
   fileSize?: number // In bytes
@@ -35,6 +37,8 @@ const teacherMaterialSchema = new Schema<ITeacherMaterial>(
     price: { type: Number, default: 0, min: 0 },
     coverImageUrl: { type: String, trim: true },
     previewFileUrl: { type: String, trim: true },
+    introVideoUrl: { type: String, trim: true },
+    previewImages: { type: [String], default: [] },
     fullFileUrl: { type: String, required: true, trim: true },
     fileType: {
       type: String,

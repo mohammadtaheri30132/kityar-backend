@@ -7,9 +7,12 @@ export const DURATION_RATIOS: Record<number, number> = {
   15: 0.2,
 }
 
-export const EXTRA_CAPACITY_PRICE_PER_STUDENT = 50000 // 50,000 Tomans
-export const STUDENT_SERVICE_FEE_PERCENT = 0.1 // 10%
-export const TEACHER_SERVICE_FEE_PERCENT = 0.1 // 10%
+export const EXTRA_CAPACITY_PRICE_PER_STUDENT = 80000 // 80,000 Tomans per added student for student private class
+export const TEACHER_RESERVATION_BASE_FEE = 80000 // 80,000 Tomans base fee for teacher 1.5h class
+export const TEACHER_RESERVATION_PER_STUDENT_FEE = 50000 // 50,000 Tomans per added student for teacher
+export const VIRTUAL_CLASSROOM_PER_STUDENT_FEE = 50000 // 50,000 Tomans per student for virtual classroom creation
+export const STUDENT_SERVICE_FEE_PERCENT = 0 // transparent total as per prompt
+export const TEACHER_SERVICE_FEE_PERCENT = 0.1 // 10% platform fee
 
 export interface DurationPriceInfo {
   minutes: number
@@ -95,6 +98,23 @@ export class OnlineClassService {
       teacherServiceFee,
       capacity: validCapacity,
     }
+  }
+
+  /**
+   * Calculate fee for teacher reserving their own 1.5-hour class:
+   * 80,000 Tomans base + 50,000 Tomans per added student
+   */
+  static calculateTeacherReservationFee(studentCount: number = 1): number {
+    const extraStudents = Math.max(0, studentCount - 1)
+    return TEACHER_RESERVATION_BASE_FEE + extraStudents * TEACHER_RESERVATION_PER_STUDENT_FEE
+  }
+
+  /**
+   * Calculate fee for creating a virtual classroom:
+   * 50,000 Tomans per student
+   */
+  static calculateVirtualClassroomFee(studentCount: number): number {
+    return Math.max(1, studentCount) * VIRTUAL_CLASSROOM_PER_STUDENT_FEE
   }
 
   /**

@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema, Types } from 'mongoose'
 
-export type MessageType = 'text' | 'image' | 'voice' | 'file'
+export type MessageType = 'text' | 'image' | 'voice' | 'file' | 'video'
 
 export interface IMessage extends Document {
   conversationId: Types.ObjectId
@@ -38,7 +38,7 @@ const messageSchema = new Schema<IMessage>(
     },
     type: {
       type: String,
-      enum: ['text', 'image', 'voice', 'file'],
+      enum: ['text', 'image', 'voice', 'file', 'video'],
       default: 'text',
     },
     mediaUrl: { type: String, trim: true },

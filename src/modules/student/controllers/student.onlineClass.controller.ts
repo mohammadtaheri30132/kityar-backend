@@ -8,6 +8,8 @@ import { Grade } from '../../../core/models/Grade.js'
 import { Book } from '../../../core/models/Book.js'
 import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
 import { WalletService } from '../../../core/services/wallet.service.js'
+import { SmsService } from '../../../core/services/sms.service.js'
+import { TeacherReview } from '../../../core/models/TeacherReview.js'
 
 export class StudentOnlineClassController {
   /**
@@ -107,7 +109,9 @@ export class StudentOnlineClassController {
         endTime: { $gt: startTime },
       }).select('teacherId')
 
-      const busyTeacherIdSet = new Set(busyBookings.map((b) => b.teacherId.toString()))
+      const busyTeacherIdSet = new Set(
+        busyBookings.filter((b) => b.teacherId).map((b) => b.teacherId!.toString())
+      )
 
       // Format available teachers
       const availableTeachers = eligibleProfiles
@@ -452,6 +456,241 @@ export class StudentOnlineClassController {
       })
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message || 'خطای سرور' })
+    }
+  }
+
+  /**
+   * GET /api/student/online-classes/search-student
+   * Search registered student in Nokita by phone number to confirm name before adding to class
+   */
+  static async searchStudentByPhone(req: Request, res: Response) {
+    try {
+      const { phone } = req.query
+      if (!phone || typeof phone !== 'string') {
+        return res.status(400).json({ success: false, message: 'شماره تلفن الزامی است' })
+      }
+
+      const cleanPhone = SmsService.normalizePhone(phone)
+      const user = await User.findOne({ phoneNumber: cleanPhone }).select('fullName phoneNumber avatar')
+
+      if (!user) {
+        return res.json({
+          success: true,
+          exists: false,
+          message: 'دانش‌آموزی با این شماره در نوکیتا یافت نشد.',
+        })
+      }
+
+      return res.json({
+        success: true,
+        exists: true,
+        user: {
+          id: user._id,
+          fullName: user.fullName || 'کاربر نوکیتا',
+          phoneNumber: user.phoneNumber,
+          avatar: user.avatar || '',
+        },
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * POST /api/student/online-classes/bookings/:id/review
+   * Post-class survey: rating, audio voice feedback, complaint
+   */
+  static async submitBookingReview(req: Request, res: Response) {
+    try {
+      const studentId = (req as any).user?._id
+      const { id } = req.params
+      const { rating = 5, comment = '', voiceUrl, isComplaint = false, complaintText = '' } = req.body
+
+      const booking = await OnlineClassBooking.findById(id)
+      if (!booking) {
+        return res.status(404).json({ success: false, message: 'کلاس یافت نشد' })
+      }
+
+      booking.review = {
+        rating: Number(rating) || 5,
+        comment: comment || '',
+        voiceUrl: voiceUrl || undefined,
+        isComplaint: Boolean(isComplaint),
+        complaintText: complaintText || undefined,
+        reviewedAt: new Date(),
+      }
+      await booking.save()
+
+      // Also create TeacherReview record
+      if (booking.teacherId) {
+        await TeacherReview.create({
+          teacherId: booking.teacherId,
+          studentId,
+          rating: Number(rating) || 5,
+          comment: comment || (isComplaint ? complaintText : 'جلسه آنلاین برگزار شد.'),
+          voiceUrl: voiceUrl || undefined,
+          isComplaint: Boolean(isComplaint),
+          complaintText: complaintText || undefined,
+          complaintStatus: isComplaint ? 'pending' : 'none',
+          contextType: 'class',
+          contextId: booking._id,
+          status: 'approved',
+        })
+
+        // Recalculate teacher rating average
+        const allReviews = await TeacherReview.find({ teacherId: booking.teacherId, status: 'approved' })
+        const totalRating = allReviews.reduce((sum, r) => sum + r.rating, 0)
+        const avg = allReviews.length > 0 ? Number((totalRating / allReviews.length).toFixed(1)) : 5.0
+        await TeacherProfile.findOneAndUpdate(
+          { user: booking.teacherId },
+          { $set: { rating: avg, ratingsCount: allReviews.length } }
+        )
+      }
+
+      return res.json({
+        success: true,
+        message: 'نظر و ارزیابی شما با موفقیت ثبت گردید. با تشکر از همراهی شما.',
+        data: booking.review,
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * POST /api/student/online-classes/book-multi
+   * Request private class with up to 10 selected teachers + SMS notification + 30 min waiting
+   */
+  static async createMultiTeacherBooking(req: Request, res: Response) {
+    try {
+      const studentId = (req as any).user?._id
+      const {
+        teacherIds = [],
+        courseId,
+        courseName,
+        gradeId,
+        gradeName,
+        subjectId,
+        subjectName,
+        educationLevel,
+        topic,
+        description,
+        scheduledAt,
+        capacity = 1,
+      } = req.body
+
+      if (!subjectName || !topic || !scheduledAt) {
+        return res.status(400).json({
+          success: false,
+          message: 'درس، موضوع و تاریخ کلاس الزامی است.',
+        })
+      }
+
+      const validCapacity = Math.max(1, Number(capacity) || 1)
+      const targetList = Array.isArray(teacherIds) ? teacherIds.slice(0, 10) : []
+
+      if (targetList.length === 0) {
+        return res.status(400).json({ success: false, message: 'حداقل یک معلم باید انتخاب شود' })
+      }
+
+      // Calculate quote: base 500,000 or highest selected teacher base + (capacity - 1) * 80,000
+      let maxTeacherBase = 500000
+      const teacherProfiles = await TeacherProfile.find({ user: { $in: targetList } }).populate(
+        'user',
+        'fullName phoneNumber'
+      )
+
+      for (const p of teacherProfiles) {
+        if (p.onlineClassBasePrice && p.onlineClassBasePrice > maxTeacherBase) {
+          maxTeacherBase = p.onlineClassBasePrice
+        }
+      }
+
+      const quote = OnlineClassService.calculateQuote({
+        basePrice90Min: maxTeacherBase,
+        durationMinutes: 90, // 1.5 hours
+        capacity: validCapacity,
+      })
+
+      // Check student wallet
+      const wallet = await WalletService.getOrCreateWallet(studentId, 'student')
+      if (wallet.balance < quote.totalPrice) {
+        return res.status(400).json({
+          success: false,
+          insufficientBalance: true,
+          requiredAmount: quote.totalPrice,
+          currentBalance: wallet.balance,
+          message: `موجودی کیف پول شما (${wallet.balance.toLocaleString('fa-IR')} تومان) کافی نیست. مبلغ مورد نیاز برای کلاس ۱.۵ ساعته با ${validCapacity} دانش‌آموز: ${quote.totalPrice.toLocaleString('fa-IR')} تومان است. لطفاً ابتدا کیف پول را شارژ کنید.`,
+        })
+      }
+
+      // Debit student wallet
+      await WalletService.debit({
+        userId: studentId,
+        userType: 'student',
+        amount: quote.totalPrice,
+        type: 'class_fee',
+        description: `رزرو کلاس خصوصی ۱.۵ ساعته: ${topic} (${validCapacity} نفر)`,
+      })
+
+      const startTime = new Date(scheduledAt)
+      const endTime = new Date(startTime.getTime() + 90 * 60000)
+      const bookingCode = `CLS-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`
+      const meetingInfo = OnlineClassService.generateMeetingInfo(bookingCode)
+
+      const waitingMinutes = 30
+      const cannotCancelBefore = new Date(Date.now() + waitingMinutes * 60 * 1000)
+      const waitingExpiresAt = cannotCancelBefore
+
+      const booking = await OnlineClassBooking.create({
+        bookingCode,
+        studentId,
+        targetTeacherIds: targetList,
+        teacherId: targetList[0], // Temporary primary until claimed
+        courseId: courseId || undefined,
+        courseName: courseName || '',
+        gradeId: gradeId || undefined,
+        gradeName: gradeName || '',
+        subjectId: subjectId || undefined,
+        subjectName,
+        educationLevel: educationLevel || 'secondary',
+        topic: topic.trim(),
+        description: description ? description.trim() : '',
+        scheduledAt: startTime,
+        durationMinutes: 90,
+        endTime,
+        capacity: validCapacity,
+        pricing: quote,
+        cannotCancelBefore,
+        waitingExpiresAt,
+        status: 'paid_pending_teacher',
+        payment: {
+          isPaid: true,
+          paidAt: new Date(),
+          paymentMethod: 'wallet',
+          trackingCode: `PAY-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
+        },
+        meeting: meetingInfo,
+      })
+
+      // Send SMS notification to each selected teacher
+      for (const p of teacherProfiles) {
+        const teacherPhone = (p.user as any)?.phoneNumber
+        if (teacherPhone) {
+          SmsService.sendSimpleMessage(
+            teacherPhone,
+            `استاد گرامی، یک درخواست کلاس آنلاین ۱.۵ ساعته برای درس «${subjectName}» در کیتایار ثبت شد. لطفاً به میز کار خود مراجعه کنید.`
+          ).catch(() => {})
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: 'درخواست کلاس خصوصی با موفقیت ثبت شد و پیامک برای معلمان منتخب ارسال گردید.',
+        data: booking,
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message || 'خطا در ثبت کلاس' })
     }
   }
 }

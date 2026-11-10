@@ -214,6 +214,14 @@ export class NativeSignalingServer {
         break
       }
 
+      case 'teacher_mute_all': {
+        if (!ws.peerId || ws.role !== 'teacher') {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها معلم کلاس امکان قطع صدای همه را دارد')
+        }
+        this.handleTeacherMuteAll(roomId)
+        break
+      }
+
       case 'teacher_remove_participant': {
         if (!ws.peerId || ws.role !== 'teacher') {
           return this.sendError(ws, 'PERMISSION_DENIED', 'تنها معلم کلاس امکان اخراج اعضا را دارد')
@@ -469,6 +477,21 @@ export class NativeSignalingServer {
   private handleSetCamera(ws: AuthenticatedSocket, roomId: string, enabled: boolean) {
     const peerId = ws.peerId
     if (!peerId) return
+    const room = RoomManager.getRoom(roomId)
+
+    // Enforce rule: At any time, only teacher and max ONE student camera can be active simultaneously
+    if (enabled && ws.role !== 'teacher' && room) {
+      const otherStudentWithCamera = Array.from(room.participants.values()).find(
+        (p) => p.peerId !== peerId && !p.isTeacher && p.role !== 'teacher' && p.cameraEnabled
+      )
+      if (otherStudentWithCamera) {
+        return this.sendError(
+          ws,
+          'CAMERA_LIMIT_REACHED',
+          'در کلاس مجازی همزمان تنها دوربین معلم و یک دانش‌آموز می‌تواند فعال باشد.'
+        )
+      }
+    }
 
     const updated = RoomManager.updateCameraState(roomId, peerId, enabled)
     if (updated) {
@@ -733,6 +756,22 @@ export class NativeSignalingServer {
       roomId,
       payload: { peerId: targetPeerId, micBlocked, micState: newState },
     })
+  }
+
+  private handleTeacherMuteAll(roomId: string) {
+    const room = RoomManager.getRoom(roomId)
+    if (!room) return
+
+    for (const [pId, p] of room.participants.entries()) {
+      if (!p.isTeacher && p.role !== 'teacher') {
+        RoomManager.updateMicrophoneState(roomId, pId, 'disabled')
+        this.broadcastToRoom(roomId, null, {
+          type: 'permission_state_changed',
+          roomId,
+          payload: { peerId: pId, micBlocked: true, micState: 'disabled' },
+        })
+      }
+    }
   }
 
   private handleTeacherRemoveParticipant(roomId: string, targetPeerId: string) {

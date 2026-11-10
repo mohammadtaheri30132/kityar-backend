@@ -340,6 +340,7 @@ export class ChatController {
       let previewText = content;
       if (type === 'voice') previewText = '🎙 پیام صوتی';
       else if (type === 'image') previewText = '📷 تصویر';
+      else if (type === 'video') previewText = '🎥 ویدیو';
       else if (type === 'file') previewText = '📎 فایل پیوست';
 
       conversation.lastMessage = previewText;

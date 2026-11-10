@@ -43,7 +43,7 @@ export class SessionSourceAdapter {
       return {
         sourceId: booking._id.toString(),
         sourceType: 'online_class_booking',
-        teacherId: booking.teacherId.toString(),
+        teacherId: booking.teacherId ? booking.teacherId.toString() : '',
         studentId: booking.studentId.toString(),
         invitedStudentIds: invitedIds,
         title: booking.topic || booking.subjectName || 'کلاس رفع اشکال آنلاین',
@@ -52,7 +52,7 @@ export class SessionSourceAdapter {
         status: booking.status,
         canAccess(userId: string, role: string): boolean {
           if (role === 'admin') return true
-          if (booking!.teacherId.toString() === userId) return true
+          if (booking!.teacherId && booking!.teacherId.toString() === userId) return true
           if (booking!.studentId.toString() === userId) return true
           return invitedIds.includes(userId)
         },

@@ -13,7 +13,7 @@ if (!fs.existsSync(chatUploadDir)) {
   fs.mkdirSync(chatUploadDir, { recursive: true });
 }
 
-// تنظیمات Multer برای فایل‌های ویس و عکس‌های WebP
+// تنظیمات Multer برای فایل‌های ویس، ویدیو، عکس و فایل (تا سقف ۳۰ مگابایت)
 const chatStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, chatUploadDir),
   filename: (_req, file, cb) => {
@@ -21,6 +21,8 @@ const chatStorage = multer.diskStorage({
     if (!ext) {
       if (file.mimetype.includes('webp')) ext = '.webp';
       else if (file.mimetype.includes('audio') || file.mimetype.includes('m4a')) ext = '.m4a';
+      else if (file.mimetype.includes('video') || file.mimetype.includes('mp4')) ext = '.mp4';
+      else if (file.mimetype.includes('pdf')) ext = '.pdf';
       else ext = '.bin';
     }
     const uniqueName = `chat_${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
@@ -30,15 +32,17 @@ const chatStorage = multer.diskStorage({
 
 const upload = multer({
   storage: chatStorage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
+  limits: { fileSize: 30 * 1024 * 1024 }, // 30MB max
   fileFilter: (_req, file, cb) => {
-    const isImage = file.mimetype.startsWith('image/') || /\.(webp|jpg|jpeg|png)$/i.test(file.originalname);
+    const isImage = file.mimetype.startsWith('image/') || /\.(webp|jpg|jpeg|png|gif)$/i.test(file.originalname);
     const isAudio = file.mimetype.startsWith('audio/') || /\.(m4a|aac|mp3|ogg|wav|webm)$/i.test(file.originalname);
+    const isVideo = file.mimetype.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(file.originalname);
+    const isDoc = file.mimetype.includes('pdf') || /\.(pdf|docx?|xlsx?|pptx?|zip|rar|txt)$/i.test(file.originalname);
 
-    if (isImage || isAudio) {
+    if (isImage || isAudio || isVideo || isDoc) {
       cb(null, true);
     } else {
-      cb(new Error('تنها ارسال فایل صوتی و تصویر مجاز است'));
+      cb(new Error('تنها ارسال فایل‌های معتبر (تصویر، ویدیو، صوت و اسناد) مجاز است'));
     }
   },
 });

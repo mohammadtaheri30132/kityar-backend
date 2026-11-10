@@ -16,6 +16,8 @@ router.post('/teachers/:id/reviews', StudentMarketplaceController.submitReview)
 // Questions (Direct & Broadcast)
 router.post('/questions', StudentMarketplaceController.submitQuestion)
 router.get('/questions', StudentMarketplaceController.getMyQuestions)
+router.post('/questions/:id/cancel', StudentMarketplaceController.cancelQuestion)
+router.post('/questions/:id/objection', StudentMarketplaceController.submitQuestionObjection)
 
 // Materials Marketplace
 router.get('/materials', StudentMarketplaceController.getMaterials)
@@ -32,9 +34,12 @@ router.get('/online-classes/academic-hierarchy', StudentOnlineClassController.ge
 router.post('/online-classes/available-teachers', StudentOnlineClassController.getAvailableTeachers)
 router.post('/online-classes/quote', StudentOnlineClassController.calculateQuote)
 router.post('/online-classes/book', StudentOnlineClassController.createBooking)
+router.post('/online-classes/book-multi', StudentOnlineClassController.createMultiTeacherBooking)
 router.get('/online-classes/my-bookings', StudentOnlineClassController.getMyBookings)
 router.get('/online-classes/bookings/:id', StudentOnlineClassController.getBookingDetails)
 router.post('/online-classes/bookings/:id/invite', StudentOnlineClassController.inviteFriend)
+router.get('/online-classes/search-student', StudentOnlineClassController.searchStudentByPhone)
+router.post('/online-classes/bookings/:id/review', StudentOnlineClassController.submitBookingReview)
 router.post('/online-classes/bookings/:id/cancel', StudentOnlineClassController.cancelBooking)
 
 // Student Wallet

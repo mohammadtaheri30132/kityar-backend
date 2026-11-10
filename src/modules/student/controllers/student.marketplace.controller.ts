@@ -141,8 +141,20 @@ export class StudentMarketplaceController {
   static async submitQuestion(req: Request, res: Response) {
     try {
       const studentId = (req as any).user?._id
-      const { teacherId, targetTeacherIds, isBroadcast, title, description, gradeId, subjectId, attachments, price } =
-        req.body
+      const {
+        teacherId,
+        targetTeacherIds,
+        isBroadcast,
+        title,
+        description,
+        gradeId,
+        gradeName,
+        subjectId,
+        subjectName,
+        educationLevel,
+        attachments,
+        price,
+      } = req.body
 
       if (!title || !description) {
         return res.status(400).json({
@@ -151,7 +163,28 @@ export class StudentMarketplaceController {
         })
       }
 
-      const questionPrice = Number(price) || 0
+      // Default question fee is 50,000 Tomans
+      let questionPrice = 50000
+      if (price !== undefined && Number(price) >= 0) {
+        questionPrice = Number(price)
+      } else if (!isBroadcast && teacherId) {
+        const tProfile = await TeacherProfile.findOne({ user: teacherId })
+        if (tProfile?.questionFee && tProfile.questionFee > 0) {
+          questionPrice = tProfile.questionFee
+        }
+      }
+
+      // Check student wallet balance
+      const wallet = await WalletService.getOrCreateWallet(studentId, 'student')
+      if (wallet.balance < questionPrice) {
+        return res.status(400).json({
+          success: false,
+          insufficientBalance: true,
+          requiredAmount: questionPrice,
+          currentBalance: wallet.balance,
+          message: `موجودی کیف پول شما (${wallet.balance.toLocaleString('fa-IR')} تومان) برای ثبت این سوال کافی نیست. مبلغ مورد نیاز: ${questionPrice.toLocaleString('fa-IR')} تومان است. لطفاً ابتدا کیف پول خود را شارژ کنید.`,
+        })
+      }
 
       // If question fee > 0, debit student wallet atomically
       if (questionPrice > 0) {
@@ -160,26 +193,44 @@ export class StudentMarketplaceController {
           userType: 'student',
           amount: questionPrice,
           type: 'question_fee',
-          description: `هزینه ثبت سوال: ${title}`,
+          description: `هزینه ثبت سوال در «کمک از معلم»: ${title}`,
         })
       }
 
-      const targetList = Array.isArray(targetTeacherIds) && targetTeacherIds.length > 0
-        ? targetTeacherIds
-        : (teacherId ? [teacherId] : undefined)
+      const targetList =
+        Array.isArray(targetTeacherIds) && targetTeacherIds.length > 0
+          ? targetTeacherIds
+          : teacherId
+          ? [teacherId]
+          : undefined
+
+      const waitingMinutes = 30
+      const cannotCancelBefore = new Date(Date.now() + waitingMinutes * 60 * 1000)
+      const waitingExpiresAt = cannotCancelBefore
 
       const question = await QuestionRequest.create({
         studentId,
-        teacherId: !isBroadcast && teacherId ? teacherId : (targetList && targetList.length === 1 ? targetList[0] : undefined),
+        teacherId:
+          !isBroadcast && teacherId
+            ? teacherId
+            : targetList && targetList.length === 1
+            ? targetList[0]
+            : undefined,
         targetTeacherIds: !isBroadcast && targetList ? targetList : undefined,
         isBroadcast: Boolean(isBroadcast),
         title,
         description,
         gradeId: gradeId || undefined,
+        gradeName: gradeName || '',
         subjectId: subjectId || undefined,
+        subjectName: subjectName || '',
+        educationLevel: educationLevel || 'secondary',
         attachments: attachments || [],
         status: 'pending',
         price: questionPrice,
+        cannotCancelBefore,
+        waitingExpiresAt,
+        payoutStatus: 'none',
       })
 
       return res.json({
@@ -189,6 +240,97 @@ export class StudentMarketplaceController {
       })
     } catch (error: any) {
       return res.status(400).json({ success: false, message: error.message || 'خطا در ثبت سوال' })
+    }
+  }
+
+  /**
+   * POST /api/student/questions/:id/cancel
+   * Cancel question after 30-minute waiting window has passed
+   */
+  static async cancelQuestion(req: Request, res: Response) {
+    try {
+      const studentId = (req as any).user?._id
+      const { id } = req.params
+
+      const question = await QuestionRequest.findOne({ _id: id, studentId })
+      if (!question) {
+        return res.status(404).json({ success: false, message: 'سوال یافت نشد' })
+      }
+
+      if (question.status !== 'pending') {
+        return res.status(400).json({
+          success: false,
+          message: 'این سوال در حال حاضر توسط معلم در حال بررسی یا پاسخ‌گویی است و قابل لغو نیست.',
+        })
+      }
+
+      if (question.cannotCancelBefore && new Date() < question.cannotCancelBefore) {
+        const remainingMinutes = Math.ceil((question.cannotCancelBefore.getTime() - Date.now()) / (60 * 1000))
+        return res.status(400).json({
+          success: false,
+          message: `امکان لغو سوال تا ۳۰ دقیقه پس از ثبت وجود ندارد. (${remainingMinutes} دقیقه باقی‌مانده است).`,
+        })
+      }
+
+      question.status = 'closed'
+      await question.save()
+
+      // Refund to student wallet
+      if (question.price > 0) {
+        await WalletService.credit({
+          userId: studentId,
+          userType: 'student',
+          amount: question.price,
+          type: 'deposit',
+          description: `استرداد وجه لغو سوال: ${question.title}`,
+        })
+      }
+
+      return res.json({
+        success: true,
+        message: 'سوال با موفقیت لغو شد و مبلغ به کیف پول شما استرداد گردید.',
+        data: question,
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * POST /api/student/questions/:id/objection
+   * Student submits dispute / objection about the answer quality
+   */
+  static async submitQuestionObjection(req: Request, res: Response) {
+    try {
+      const studentId = (req as any).user?._id
+      const { id } = req.params
+      const { reason } = req.body
+
+      if (!reason || !reason.trim()) {
+        return res.status(400).json({ success: false, message: 'لطفاً شرح اعتراض خود را وارد نمایید' })
+      }
+
+      const question = await QuestionRequest.findOne({ _id: id, studentId })
+      if (!question) {
+        return res.status(404).json({ success: false, message: 'سوال یافت نشد' })
+      }
+
+      question.objection = {
+        hasObjection: true,
+        reason: reason.trim(),
+        filedAt: new Date(),
+        status: 'pending',
+      }
+      question.payoutStatus = 'pending_review'
+      await question.save()
+
+      return res.json({
+        success: true,
+        message: 'اعتراض شما با موفقیت ثبت شد و برای بررسی کارشناس و مدیریت ارسال گردید.',
+        data: question,
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message })
     }
   }
 
@@ -306,13 +448,17 @@ export class StudentMarketplaceController {
         })
         tx = debitResult.transaction
 
+        // Platform commission is 30%, teacher receives 70%
+        const platformCommissionRate = 0.30
+        const teacherShare = Math.round(material.price * (1 - platformCommissionRate))
+
         // Credit teacher wallet
         await WalletService.credit({
           userId: material.teacherId,
           userType: 'teacher',
-          amount: material.price,
+          amount: teacherShare,
           type: 'material_sale',
-          description: `درآمد حاصل از فروش محتوا: ${material.title}`,
+          description: `درآمد حاصل از فروش جزوه/محتوا: ${material.title} (سهم ۷۰٪ پس از کسر ۳۰٪ کارمزد پلتفرم)`,
           referenceId: material._id.toString(),
           referenceModel: 'TeacherMaterial',
         })
@@ -328,7 +474,7 @@ export class StudentMarketplaceController {
 
       // Increment material stats
       await TeacherMaterial.findByIdAndUpdate(material._id, {
-        $inc: { salesCount: 1, totalEarnings: material.price },
+        $inc: { salesCount: 1, totalEarnings: Math.round(material.price * 0.7) },
       })
 
       return res.json({

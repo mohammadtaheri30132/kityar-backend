@@ -7,8 +7,10 @@ import { Conversation } from '../../../core/models/Conversation.js'
 import { Message } from '../../../core/models/Message.js'
 import { TeacherMaterial } from '../../../core/models/TeacherMaterial.js'
 import { OnlineClass } from '../../../core/models/OnlineClass.js'
+import { Classroom } from '../../../core/models/Classroom.js'
 import { TeacherReview } from '../../../core/models/TeacherReview.js'
 import { WalletService } from '../../../core/services/wallet.service.js'
+import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
 import { Wallet } from '../../../core/models/Wallet.js'
 import { WalletTransaction } from '../../../core/models/WalletTransaction.js'
 
@@ -19,6 +21,49 @@ function getTodayDateString(): string {
 
 export class TeacherCenterController {
   /**
+   * Helper: Check and auto-release payouts older than 2 days with no pending objection
+   */
+  static async checkAndReleaseEligiblePayouts() {
+    try {
+      const eligible = await QuestionRequest.find({
+        status: 'answered',
+        payoutStatus: 'pending_review',
+        payoutEligibleAt: { $lte: new Date() },
+        $or: [
+          { 'objection.hasObjection': false },
+          { 'objection.hasObjection': { $exists: false } },
+          { 'objection.status': 'resolved_paid' },
+        ],
+        price: { $gt: 0 },
+      })
+
+      for (const q of eligible) {
+        const teacherId = q.claimedBy || q.teacherId
+        if (teacherId) {
+          try {
+            await WalletService.credit({
+              userId: teacherId,
+              userType: 'teacher',
+              amount: q.price,
+              type: 'question_reward',
+              description: `تسویه درآمد پاسخ به سوال: ${q.title} (تایید خودکار پس از ۲ روز)`,
+              referenceId: q._id.toString(),
+              referenceModel: 'QuestionRequest',
+            })
+            q.payoutStatus = 'approved'
+            q.payoutPaidAt = new Date()
+            await q.save()
+          } catch (err: any) {
+            console.error('Error auto-releasing payout for question:', q._id, err.message)
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('Error in checkAndReleaseEligiblePayouts:', err.message)
+    }
+  }
+
+  /**
    * GET /api/teacher/center/overview
    * Consolidated overview for the Teacher Center dashboard
    */
@@ -28,6 +73,9 @@ export class TeacherCenterController {
       if (!userId) {
         return res.status(401).json({ success: false, message: 'کاربر احراز هویت نشده است' })
       }
+
+      // Check and release any eligible question payouts automatically
+      await TeacherCenterController.checkAndReleaseEligiblePayouts()
 
       let profile = await TeacherProfile.findOne({ user: userId })
       if (!profile) {
@@ -516,7 +564,7 @@ export class TeacherCenterController {
 
   /**
    * POST /api/teacher/center/requests/:id/answer
-   * Mark as answered and credit reward/fee to teacher wallet
+   * Mark as answered and place payout in escrow (pending admin review / 2-day auto release)
    */
   static async answerRequest(req: Request, res: Response) {
     try {
@@ -536,24 +584,22 @@ export class TeacherCenterController {
       request.status = 'answered'
       request.answerSummary = answerSummary || ''
       request.answeredAt = new Date()
-      await request.save()
+      // Retention: Chat remains accessible for 2 days
+      request.chatRetentionUntil = new Date(Date.now() + 2 * 24 * 3600 * 1000)
 
-      // If there is a fee, credit teacher wallet
+      // Payout held in escrow: requires admin review or auto-approval after 2 days
       if (request.price > 0) {
-        await WalletService.credit({
-          userId,
-          userType: 'teacher',
-          amount: request.price,
-          type: 'question_reward',
-          description: `درآمد پاسخ به سوال: ${request.title}`,
-          referenceId: request._id.toString(),
-          referenceModel: 'QuestionRequest',
-        })
+        request.payoutStatus = 'pending_review'
+        request.payoutEligibleAt = new Date(Date.now() + 2 * 24 * 3600 * 1000)
+      } else {
+        request.payoutStatus = 'none'
       }
+
+      await request.save()
 
       return res.json({
         success: true,
-        message: 'پاسخ به سوال ثبت شد',
+        message: 'پاسخ شما با موفقیت ثبت شد. گفتگو تا ۲ روز در دسترس خواهد بود و مبلغ پس از بررسی کارشناس یا تایید خودکار واریز می‌شود.',
         data: request,
       })
     } catch (error: any) {
@@ -787,6 +833,182 @@ export class TeacherCenterController {
           ratingsCount: profile?.ratingsCount || reviews.length,
           reviews,
         },
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * POST /api/teacher/center/virtual-classroom
+   * Teacher creates a virtual classroom: 50,000 Tomans per student debited from wallet
+   */
+  static async createVirtualClassroom(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?._id
+      const { name, grade, subject, studentCount = 1, studentPhoneNumbers = [] } = req.body
+
+      if (!name) {
+        return res.status(400).json({ success: false, message: 'نام کلاس الزامی است' })
+      }
+
+      const count = Math.max(1, Number(studentCount) || (studentPhoneNumbers.length > 0 ? studentPhoneNumbers.length : 1))
+      const totalFee = count * 50000 // 50,000 Tomans per student
+
+      // Check teacher wallet balance
+      const wallet = await WalletService.getOrCreateWallet(userId, 'teacher')
+      if (wallet.balance < totalFee) {
+        return res.status(400).json({
+          success: false,
+          insufficientBalance: true,
+          requiredAmount: totalFee,
+          currentBalance: wallet.balance,
+          message: `موجودی کیف پول شما (${wallet.balance.toLocaleString('fa-IR')} تومان) برای ایجاد کلاس با ${count} دانش‌آموز کافی نیست. مبلغ مورد نیاز: ${totalFee.toLocaleString('fa-IR')} تومان است. لطفاً ابتدا کیف پول خود را شارژ کنید.`,
+        })
+      }
+
+      // Debit from wallet
+      await WalletService.debit({
+        userId,
+        userType: 'teacher',
+        amount: totalFee,
+        type: 'class_fee',
+        description: `هزینه ایجاد کلاس مجازی: ${name} (${count} دانش‌آموز)`,
+      })
+
+      // Generate class code
+      const code = Math.floor(10000 + Math.random() * 90000).toString()
+
+      const newClassroom = await Classroom.create({
+        name,
+        grade: grade || '',
+        subject: subject || '',
+        teacher: userId,
+        code,
+        students: studentPhoneNumbers || [],
+        capacity: count,
+      })
+
+      return res.json({
+        success: true,
+        message: 'کلاس مجازی با موفقیت ایجاد شد و هزینه از کیف پول شما کسر گردید.',
+        data: newClassroom,
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * POST /api/teacher/center/reserve-online-class
+   * Teacher reserves their own 1.5-hour online class session:
+   * 80,000 Tomans base + 50,000 Tomans per added student
+   * Duration: 90 mins active + 5 mins buffer = 95 minutes
+   */
+  static async reserveOnlineClassSession(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?._id
+      const { title, description, gradeId, subjectId, scheduledAt, capacity = 1 } = req.body
+
+      if (!title || !scheduledAt) {
+        return res.status(400).json({ success: false, message: 'عنوان و زمان شروع کلاس الزامی است' })
+      }
+
+      const validCapacity = Math.max(1, Number(capacity) || 1)
+      const totalFee = OnlineClassService.calculateTeacherReservationFee(validCapacity)
+
+      const wallet = await WalletService.getOrCreateWallet(userId, 'teacher')
+      if (wallet.balance < totalFee) {
+        return res.status(400).json({
+          success: false,
+          insufficientBalance: true,
+          requiredAmount: totalFee,
+          currentBalance: wallet.balance,
+          message: `موجودی کیف پول شما کافی نیست. هزینه رزرو کلاس ۱.۵ ساعته برای ${validCapacity} دانش‌آموز: ${totalFee.toLocaleString('fa-IR')} تومان است. لطفاً ابتدا کیف پول خود را شارژ کنید.`,
+        })
+      }
+
+      await WalletService.debit({
+        userId,
+        userType: 'teacher',
+        amount: totalFee,
+        type: 'class_fee',
+        description: `رزرو کلاس آنلاین ۱.۵ ساعته: ${title} (${validCapacity} دانش‌آموز)`,
+      })
+
+      const meetingCode = `ROOM-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`
+      const meetingLink = `https://meet.kitayar.ir/${meetingCode}`
+
+      const onlineClass = await OnlineClass.create({
+        teacherId: userId,
+        title,
+        description: description || '',
+        gradeId: gradeId || undefined,
+        subjectId: subjectId || undefined,
+        scheduledAt: new Date(scheduledAt),
+        durationMinutes: 90,
+        maxAllowedSeconds: 95 * 60, // 95 minutes active window (1.5h + 5 min buffer)
+        totalActiveSeconds: 0,
+        platform: 'other',
+        meetingLink,
+        accessCode: meetingCode,
+        isFree: false,
+        price: totalFee,
+        costPaid: totalFee,
+        capacity: validCapacity,
+        status: 'scheduled',
+      })
+
+      return res.json({
+        success: true,
+        message: 'کلاس آنلاین ۱.۵ ساعته شما با موفقیت رزرو شد.',
+        data: onlineClass,
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * PUT /api/teacher/center/workdesk-settings
+   * Complete teacher work desk setup: subjects, grades, schedule, resume, pricing
+   */
+  static async updateWorkDeskSettings(req: Request, res: Response) {
+    try {
+      const userId = (req as any).user?._id
+      const {
+        teachingSubjects,
+        teachingGrades,
+        educationLevel,
+        availableSchedule,
+        questionFee,
+        onlineClassBasePrice,
+        resume,
+        headline,
+        bio,
+      } = req.body
+
+      let profile = await TeacherProfile.findOne({ user: userId })
+      if (!profile) {
+        profile = new TeacherProfile({ user: userId })
+      }
+
+      if (Array.isArray(teachingSubjects)) profile.teachingSubjects = teachingSubjects
+      if (Array.isArray(teachingGrades)) profile.teachingGrades = teachingGrades
+      if (educationLevel) profile.educationLevel = educationLevel
+      if (Array.isArray(availableSchedule)) profile.availableSchedule = availableSchedule
+      if (typeof questionFee === 'number') profile.questionFee = questionFee
+      if (typeof onlineClassBasePrice === 'number') profile.onlineClassBasePrice = onlineClassBasePrice
+      if (resume) profile.resume = { ...profile.resume, ...resume }
+      if (headline !== undefined) profile.headline = headline
+      if (bio !== undefined) profile.bio = bio
+
+      await profile.save()
+
+      return res.json({
+        success: true,
+        message: 'اطلاعات میز کار و مهارت‌های تدریس با موفقیت بروزرسانی شد',
+        data: profile,
       })
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message })

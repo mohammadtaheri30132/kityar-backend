@@ -19,6 +19,10 @@ export interface IOnlineClass extends Document {
   capacity: number
   registeredStudents: Types.ObjectId[]
   status: OnlineClassStatus
+  costPaid?: number
+  totalActiveSeconds?: number
+  maxAllowedSeconds?: number // Default 95 * 60 = 5700 seconds (1.5h + 5 min buffer)
+  lastEnteredAt?: Date
   createdAt: Date
   updatedAt: Date
 }
@@ -42,6 +46,10 @@ const onlineClassSchema = new Schema<IOnlineClass>(
     isFree: { type: Boolean, default: true },
     price: { type: Number, default: 0, min: 0 },
     capacity: { type: Number, default: 50 },
+    costPaid: { type: Number, default: 0 },
+    totalActiveSeconds: { type: Number, default: 0 },
+    maxAllowedSeconds: { type: Number, default: 95 * 60 },
+    lastEnteredAt: { type: Date },
     registeredStudents: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     status: {
       type: String,

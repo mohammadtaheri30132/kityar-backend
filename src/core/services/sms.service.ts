@@ -148,6 +148,25 @@ export class SmsService {
   }
 
   /**
+   * ارسال پیامک ساده متنی (برای اطلاع‌رسانی درخواست کلاس و رویدادها)
+   */
+  public static async sendSimpleMessage(phoneNumber: string, message: string): Promise<boolean> {
+    const cleanPhone = this.normalizePhone(phoneNumber);
+    if (!cleanPhone) return false;
+    const apiKey = process.env.KAVENEGAR_API_KEY || this.apiKey;
+    const sender = process.env.KAVENEGAR_SENDER || this.sender;
+    try {
+      const url = `https://api.kavenegar.com/v1/${apiKey}/sms/send.json?receptor=${cleanPhone}&message=${encodeURIComponent(message)}` + (sender ? `&sender=${sender}` : '');
+      const response = await fetch(url);
+      const data: any = await response.json();
+      return data?.return?.status === 200;
+    } catch (err: any) {
+      logger.error('Error sending sms notification:', err.message);
+      return false;
+    }
+  }
+
+  /**
    * اعتبارسنجی کد وارد شده توسط کاربر
    */
   public static verifyOtp(phoneNumber: string, enteredOtp: string): boolean {
