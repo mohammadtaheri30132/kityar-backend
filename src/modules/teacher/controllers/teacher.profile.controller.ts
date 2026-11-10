@@ -118,6 +118,9 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
       province,
       experienceYears,
       resume,
+      educationLevel,
+      teachingSubjects,
+      teachingGrades,
     } = req.body
 
     // ۱. بروزرسانی نام کاربر در مدل User
@@ -137,6 +140,9 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
     if (province !== undefined) updateFields.province = province
     if (experienceYears !== undefined) updateFields.experienceYears = experienceYears
     if (resume !== undefined) updateFields.resume = resume
+    if (educationLevel !== undefined) updateFields.educationLevel = educationLevel
+    if (teachingSubjects !== undefined) updateFields.teachingSubjects = teachingSubjects
+    if (teachingGrades !== undefined) updateFields.teachingGrades = teachingGrades
 
     const updatedProfile = await TeacherProfile.findOneAndUpdate(
       { user: userId },
