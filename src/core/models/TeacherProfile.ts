@@ -54,6 +54,7 @@ export interface ITeacherProfile extends Document {
   headline?: string
   bio?: string
   avatar?: string
+  coverImage?: string
   city?: string
   province?: string
   experienceYears?: number
@@ -166,6 +167,10 @@ const teacherProfileSchema = new Schema<ITeacherProfile>(
       default: '',
     },
     avatar: {
+      type: String,
+      default: '',
+    },
+    coverImage: {
       type: String,
       default: '',
     },

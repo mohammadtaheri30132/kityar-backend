@@ -114,6 +114,7 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
       headline,
       bio,
       avatar,
+      coverImage,
       city,
       province,
       experienceYears,
@@ -136,6 +137,7 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
     if (headline !== undefined) updateFields.headline = headline
     if (bio !== undefined) updateFields.bio = bio
     if (avatar !== undefined) updateFields.avatar = avatar
+    if (coverImage !== undefined) updateFields.coverImage = coverImage
     if (city !== undefined) updateFields.city = city
     if (province !== undefined) updateFields.province = province
     if (experienceYears !== undefined) updateFields.experienceYears = experienceYears

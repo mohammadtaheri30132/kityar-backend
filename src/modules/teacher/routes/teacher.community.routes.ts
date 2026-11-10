@@ -23,7 +23,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit
+  limits: { fileSize: 35 * 1024 * 1024 }, // 35MB limit (supports up to 30MB video)
 });
 
 const router = Router();
@@ -65,21 +65,54 @@ router.delete('/comments/:commentId', protect, communityController.deleteComment
 // Reporting
 router.post('/report', protect, communityController.submitReport);
 
-// Attachment / Media Upload
-router.post('/upload', protect, upload.single('file'), (req, res) => {
+// Attachment / Media Upload (with automatic lossless/high-quality image compression)
+router.post('/upload', protect, upload.single('file'), async (req, res) => {
   if (!req.file) {
     res.status(400).json({ success: false, message: 'هیچ فایلی ارسال نشد' });
     return;
   }
-  const fileUrl = `/uploads/community/${req.file.filename}`;
+
   const isImage = req.file.mimetype.startsWith('image/');
+  const isVideo = req.file.mimetype.startsWith('video/');
+
+  // Compress image on server if it is an image
+  if (isImage) {
+    try {
+      const sharp = (await import('sharp')).default;
+      const originalPath = req.file.path;
+      const parsed = path.parse(originalPath);
+      const optimizedPath = path.join(parsed.dir, `opt_${parsed.base}`);
+
+      await sharp(originalPath)
+        .rotate()
+        .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 82, progressive: true, mozjpeg: true })
+        .toFile(optimizedPath);
+
+      const origSize = fs.statSync(originalPath).size;
+      const optSize = fs.statSync(optimizedPath).size;
+
+      if (optSize < origSize) {
+        fs.unlinkSync(originalPath);
+        fs.renameSync(optimizedPath, originalPath);
+      } else {
+        fs.unlinkSync(optimizedPath);
+      }
+    } catch (compressErr) {
+      // Fallback gracefully to original file if compression encounters any issue
+    }
+  }
+
+  const fileUrl = `/uploads/community/${req.file.filename}`;
+  const finalSize = fs.existsSync(req.file.path) ? fs.statSync(req.file.path).size : req.file.size;
+
   res.json({
     success: true,
     data: {
       url: fileUrl,
-      type: isImage ? 'image' : 'file',
+      type: isImage ? 'image' : isVideo ? 'video' : 'file',
       name: req.file.originalname,
-      size: req.file.size,
+      size: finalSize,
     },
   });
 });
