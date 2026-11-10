@@ -172,6 +172,10 @@ export class TeacherCenterController {
             rating: profile.rating || 5.0,
             ratingsCount: profile.ratingsCount || 0,
             rankingScore: profile.rankingScore || 100,
+            teachingSubjects: profile.teachingSubjects || [],
+            teachingGrades: profile.teachingGrades || [],
+            educationLevel: profile.educationLevel || 'secondary',
+            availableSchedule: profile.availableSchedule || [],
           },
         },
       })
