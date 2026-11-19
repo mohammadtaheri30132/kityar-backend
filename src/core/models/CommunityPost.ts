@@ -56,7 +56,7 @@ const communityPostSchema = new Schema<ICommunityPost>(
     attachments: [
       {
         url: { type: String, required: true },
-        type: { type: String, enum: ['image', 'file'], default: 'image' },
+        type: { type: String, enum: ['image', 'video', 'file'], default: 'image' },
         name: { type: String },
         size: { type: Number },
       },

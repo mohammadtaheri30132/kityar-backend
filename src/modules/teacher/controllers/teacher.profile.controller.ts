@@ -56,7 +56,7 @@ export const getProfile = async (req: Request, res: Response): Promise<void> => 
     const studentsCount = allStudentsSet.size
 
     // شمارش پست‌های منتشر شده در بخش تعامل
-    const postsCount = await CommunityPost.countDocuments({ author: userId, isDeleted: false })
+    const postsCount = await CommunityPost.countDocuments({ author: userId, status: 'active' })
 
     // ۳. شمارش کل افراد دعوت‌شده به سیستم (از طریق لینک آزمون، کلاس‌ها و کدهای دعوت)
     const { StudentProfile } = await import('../../../core/models/StudentProfile.js')

@@ -42,8 +42,10 @@ router.get('/class-requests', TeacherOnlineClassController.getClassRequests)
 router.post('/class-requests/:id/accept', TeacherOnlineClassController.acceptRequest)
 router.post('/class-requests/:id/reject', TeacherOnlineClassController.rejectRequest)
 router.post('/class-requests/:id/complete', TeacherOnlineClassController.completeClass)
+router.post('/class-requests/:id/invite', TeacherOnlineClassController.inviteStudent)
 
 // Virtual Classroom & Online Class Reservation by Teacher
+router.get('/search-student', TeacherCenterController.searchStudentByPhone)
 router.post('/virtual-classroom', TeacherCenterController.createVirtualClassroom)
 router.post('/reserve-online-class', TeacherCenterController.reserveOnlineClassSession)
 router.put('/workdesk-settings', TeacherCenterController.updateWorkDeskSettings)

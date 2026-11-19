@@ -38,6 +38,7 @@ router.post('/online-classes/book-multi', StudentOnlineClassController.createMul
 router.get('/online-classes/my-bookings', StudentOnlineClassController.getMyBookings)
 router.get('/online-classes/bookings/:id', StudentOnlineClassController.getBookingDetails)
 router.post('/online-classes/bookings/:id/invite', StudentOnlineClassController.inviteFriend)
+router.post('/online-classes/bookings/:id/respond-invite', StudentOnlineClassController.respondToInvite)
 router.get('/online-classes/search-student', StudentOnlineClassController.searchStudentByPhone)
 router.post('/online-classes/bookings/:id/review', StudentOnlineClassController.submitBookingReview)
 router.post('/online-classes/bookings/:id/cancel', StudentOnlineClassController.cancelBooking)

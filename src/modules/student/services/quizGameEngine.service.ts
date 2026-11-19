@@ -2,25 +2,14 @@ import { Types } from 'mongoose'
 import { v4 as uuidv4 } from 'uuid'
 import { QuizProfile, IQuizProfile } from '../../../core/models/QuizProfile.js'
 import { QuizMatch, IQuizMatch, IQuizPlayerState } from '../../../core/models/QuizMatch.js'
-import { QuizConfig, IQuizConfig } from '../../../core/models/QuizConfig.js'
+import { QuizConfig, IQuizConfig, DEFAULT_QUIZ_BOTS, IQuizBotProfile } from '../../../core/models/QuizConfig.js'
 import { CoinTransaction } from '../../../core/models/CoinTransaction.js'
 import { Question } from '../../../core/models/Question.js'
 import { User } from '../../../core/models/User.js'
 import { StudentProfile } from '../../../core/models/StudentProfile.js'
 import { QuizMission, StudentMissionProgress } from '../../../core/models/QuizMission.js'
 
-// ربات‌های پیش‌فرض آموزشی نوکیتا
-export const BOT_ROSTER = [
-  { id: 'bot_aria', name: 'آریا رادمنش', avatar: 'avatar_bot_1', difficulty: 'easy' as const },
-  { id: 'bot_sara', name: 'سارا تهرانی', avatar: 'avatar_bot_2', difficulty: 'easy' as const },
-  { id: 'bot_nima', name: 'نیما سعیدی', avatar: 'avatar_bot_3', difficulty: 'easy' as const },
-  { id: 'bot_fatemeh', name: 'فاطمه احمدی', avatar: 'avatar_bot_4', difficulty: 'easy' as const },
-  { id: 'bot_parsa', name: 'پارسا کریمی', avatar: 'avatar_bot_5', difficulty: 'medium' as const },
-  { id: 'bot_yasna', name: 'یسنا محمدی', avatar: 'avatar_bot_6', difficulty: 'medium' as const },
-  { id: 'bot_amir', name: 'امیرحسین زارعی', avatar: 'avatar_bot_7', difficulty: 'medium' as const },
-  { id: 'bot_soheila', name: 'سهیلا رستمی', avatar: 'avatar_bot_8', difficulty: 'hard' as const },
-  { id: 'bot_danial', name: 'دانیال مهدوی', avatar: 'avatar_bot_9', difficulty: 'hard' as const },
-]
+export const BOT_ROSTER: IQuizBotProfile[] = DEFAULT_QUIZ_BOTS
 
 export interface MatchmakingQueueEntry {
   ticketId: string
@@ -43,7 +32,10 @@ export class QuizGameEngineService {
   static async getConfig(): Promise<IQuizConfig> {
     let config = await QuizConfig.findOne({ key: 'global' })
     if (!config) {
-      config = await QuizConfig.create({ key: 'global' })
+      config = await QuizConfig.create({ key: 'global', bots: DEFAULT_QUIZ_BOTS })
+    } else if (!Array.isArray(config.bots) || config.bots.length === 0) {
+      config.bots = DEFAULT_QUIZ_BOTS
+      await config.save()
     }
     return config
   }
@@ -236,7 +228,7 @@ export class QuizGameEngineService {
   /**
    * انتخاب ربات بر اساس توزیع شانس
    */
-  private static selectBot(config: IQuizConfig) {
+  private static selectBot(config: IQuizConfig): IQuizBotProfile {
     const rand = Math.random() * 100
     const easyThreshold = config.botDistribution.easy
     const mediumThreshold = easyThreshold + config.botDistribution.medium
@@ -248,9 +240,11 @@ export class QuizGameEngineService {
       targetDiff = 'medium'
     }
 
-    const candidates = BOT_ROSTER.filter(b => b.difficulty === targetDiff)
-    const selected = candidates[Math.floor(Math.random() * candidates.length)] || BOT_ROSTER[0]
-    return selected
+    const activeBots = (config.bots || []).filter(b => b.isActive !== false)
+    const pool = activeBots.length > 0 ? activeBots : DEFAULT_QUIZ_BOTS
+    const candidates = pool.filter(b => b.difficulty === targetDiff)
+    const finalPool = candidates.length > 0 ? candidates : pool
+    return finalPool[Math.floor(Math.random() * finalPool.length)] || DEFAULT_QUIZ_BOTS[0]
   }
 
   /**

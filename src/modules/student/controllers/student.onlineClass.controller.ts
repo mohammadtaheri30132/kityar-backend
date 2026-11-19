@@ -1,23 +1,112 @@
 import { Request, Response } from 'express'
 import { Types } from 'mongoose'
 import { OnlineClassBooking } from '../../../core/models/OnlineClassBooking.js'
+import { OnlineClassMembership } from '../../../core/models/OnlineClassMembership.js'
 import { TeacherProfile } from '../../../core/models/TeacherProfile.js'
 import { User } from '../../../core/models/User.js'
 import { Course } from '../../../core/models/Course.js'
 import { Grade } from '../../../core/models/Grade.js'
 import { Book } from '../../../core/models/Book.js'
+import {
+  EduBook,
+  EduChapter,
+  EduField,
+  EduGrade,
+  EduLesson,
+  EduLevel,
+} from '../../../core/models/EduContent.js'
 import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
 import { WalletService } from '../../../core/services/wallet.service.js'
 import { SmsService } from '../../../core/services/sms.service.js'
 import { TeacherReview } from '../../../core/models/TeacherReview.js'
+import { ClassroomSession } from '../../classroom/models/ClassroomSession.js'
+import { RoomManager } from '../../classroom/native/services/RoomManager.js'
+import { withTeacherBookingLock } from '../../../core/utils/bookingSlotLock.js'
+import { logger } from '../../../core/utils/logger.js'
+import {
+  getTehranTimeParts,
+  isWindowWithinWeeklySchedule,
+  resolveRequestedDateTime,
+  teacherMatchesAcademicCriteria,
+  teacherMatchesEducationLevel,
+} from '../../../core/utils/weeklySchedule.js'
 
 export class StudentOnlineClassController {
   /**
    * GET /api/student/online-classes/academic-hierarchy
-   * Returns active courses, grades, and books/subjects
+   * Reads rich curriculum from Educational Content Management (EduLevel -> EduGrade -> EduField -> EduBook -> EduChapter -> EduLesson),
+   * falling back to legacy Course/Grade/Book if EduContent is empty.
    */
   static async getAcademicHierarchy(req: Request, res: Response) {
     try {
+      const [eduLevels, eduGrades, eduFields, eduBooks, eduChapters, eduLessons] = await Promise.all([
+        EduLevel.find({ isActive: true }).sort({ order: 1 }).lean(),
+        EduGrade.find({ isActive: true }).sort({ order: 1 }).lean(),
+        EduField.find({ isActive: true }).sort({ order: 1 }).lean(),
+        EduBook.find({ isActive: true }).sort({ order: 1 }).lean(),
+        EduChapter.find({ isActive: true }).sort({ order: 1 }).lean(),
+        EduLesson.find({ isActive: true }).sort({ order: 1 }).lean(),
+      ])
+
+      if (eduLevels.length > 0) {
+        const fieldNameMap = new Map<string, string>()
+        for (const f of eduFields) fieldNameMap.set(String(f._id), f.name)
+
+        const lessonsByChapter = new Map<string, any[]>()
+        for (const l of eduLessons) {
+          const cid = String(l.chapterId)
+          if (!lessonsByChapter.has(cid)) lessonsByChapter.set(cid, [])
+          lessonsByChapter.get(cid)!.push({ id: l._id, title: l.title })
+        }
+
+        const chaptersByBook = new Map<string, any[]>()
+        for (const ch of eduChapters) {
+          const bid = String(ch.bookId)
+          if (!chaptersByBook.has(bid)) chaptersByBook.set(bid, [])
+          chaptersByBook.get(bid)!.push({
+            id: ch._id,
+            title: ch.title,
+            lessons: lessonsByChapter.get(String(ch._id)) || [],
+          })
+        }
+
+        const booksByGrade = new Map<string, any[]>()
+        for (const b of eduBooks) {
+          const gid = String(b.gradeId)
+          if (!booksByGrade.has(gid)) booksByGrade.set(gid, [])
+          const fId = b.fieldId ? String(b.fieldId) : undefined
+          booksByGrade.get(gid)!.push({
+            id: b._id,
+            name: b.title,
+            fieldId: fId,
+            fieldName: fId ? fieldNameMap.get(fId) : undefined,
+            icon: '📘',
+            chapters: chaptersByBook.get(String(b._id)) || [],
+          })
+        }
+
+        const hierarchy = eduLevels.map((lvl) => {
+          const levelFields = eduFields
+            .filter((f) => String(f.levelId) === String(lvl._id))
+            .map((f) => ({ id: f._id, name: f.name }))
+          const levelGrades = eduGrades.filter((g) => String(g.levelId) === String(lvl._id))
+          return {
+            id: lvl._id,
+            name: lvl.name,
+            code: lvl.code,
+            fields: levelFields,
+            grades: levelGrades.map((g) => ({
+              id: g._id,
+              name: g.name,
+              numericOrder: g.numericOrder,
+              subjects: booksByGrade.get(String(g._id)) || [],
+            })),
+          }
+        })
+
+        return res.json({ success: true, data: hierarchy })
+      }
+
       const courses = await Course.find({ isActive: true }).sort({ order: 1 })
       const grades = await Grade.find({ isActive: true }).sort({ order: 1 })
       const books = await Book.find({ isActive: true }).sort({ order: 1 })
@@ -43,6 +132,7 @@ export class StudentOnlineClassController {
                 id: book._id,
                 name: book.name,
                 icon: book.icon || '📖',
+                chapters: [],
               })),
             }
           }),
@@ -58,65 +148,179 @@ export class StudentOnlineClassController {
 
   /**
    * POST /api/student/online-classes/available-teachers
-   * Filter and list teachers available for online class booking
+   * Filter teachers strictly by:
+   * 1) Active profile & supported duration
+   * 2) Education level & teaching subjects
+   * 3) Weekly availability schedule covering FULL requested [StartTime, EndTime]
+   * 4) No overlapping confirmed / in_progress / paid_pending_teacher / active temporary holds
    */
   static async getAvailableTeachers(req: Request, res: Response) {
     try {
       const {
         courseId,
+        courseName,
         gradeId,
+        gradeName,
         subjectId,
         subjectName,
         scheduledAt,
+        date,
+        startTime: startTimeInput,
         durationMinutes = 60,
       } = req.body
 
       const duration = Number(durationMinutes) || 60
-      const startTime = scheduledAt ? new Date(scheduledAt) : new Date(Date.now() + 3600000)
-      const endTime = new Date(startTime.getTime() + duration * 60000)
-
-      // Query active teacher profiles
-      const profileQuery: any = {
-        isActive: true,
+      if (![15, 30, 45, 60, 75, 90].includes(duration)) {
+        return res.status(400).json({ success: false, message: 'مدت کلاس نامعتبر است.' })
       }
 
-      const profiles = await TeacherProfile.find(profileQuery)
+      const startTime = resolveRequestedDateTime({
+        scheduledAt,
+        date,
+        startTime: startTimeInput,
+      })
+
+      if (!startTime) {
+        return res.status(400).json({
+          success: false,
+          message: 'تاریخ و ساعت شروع کلاس معتبر نیست.',
+        })
+      }
+
+      if (getTehranTimeParts(startTime).dateKey < getTehranTimeParts(new Date()).dateKey) {
+        return res.status(400).json({
+          success: false,
+          message: 'امکان جستجو برای تاریخ‌های گذشته وجود ندارد.',
+        })
+      }
+
+      const endTime = new Date(startTime.getTime() + duration * 60000)
+
+      // Resolve course/grade/subject names if only IDs were sent
+      let resolvedCourseName = courseName || ''
+      let resolvedGradeName = gradeName || ''
+      let resolvedSubjectName = subjectName || ''
+
+      if (!resolvedCourseName && courseId && Types.ObjectId.isValid(courseId)) {
+        const c = (await EduLevel.findById(courseId).select('name').lean()) || (await Course.findById(courseId).select('name').lean())
+        if (c) resolvedCourseName = c.name
+      }
+      if (!resolvedGradeName && gradeId && Types.ObjectId.isValid(gradeId)) {
+        const g = (await EduGrade.findById(gradeId).select('name').lean()) || (await Grade.findById(gradeId).select('name').lean())
+        if (g) resolvedGradeName = g.name
+      }
+      if (!resolvedSubjectName && subjectId && Types.ObjectId.isValid(subjectId)) {
+        const eb = await EduBook.findById(subjectId).select('title').lean()
+        if (eb) {
+          resolvedSubjectName = eb.title
+        } else {
+          const b = await Book.findById(subjectId).select('name').lean()
+          if (b) resolvedSubjectName = b.name
+        }
+      }
+
+      const profiles = await TeacherProfile.find({ isActive: { $ne: false } })
         .populate('user', 'fullName avatar phoneNumber')
         .sort({ rating: -1, ratingsCount: -1 })
 
-      // Filter teachers who have enabled this duration
       const durationKey = duration.toString()
-      const eligibleProfiles = profiles.filter((p: any) => {
-        if (!p.user) return false
+      const eligibleWithWindow: Array<{
+        profile: any
+        windowInfo: ReturnType<typeof isWindowWithinWeeklySchedule>
+        isSubjectMatch: boolean
+      }> = []
+      const skipDiagnostics: Array<{ teacherId: string; name?: string; reason: string }> = []
+
+      for (const p of profiles as any[]) {
+        if (!p.user) continue
+        const tId = String(p.user._id || p.user)
+        const tName = p.user.fullName || p.user.phoneNumber || tId
+
+        // 1. Duration preference
         if (p.onlineClassDurations) {
-          if (p.onlineClassDurations instanceof Map) {
-            return p.onlineClassDurations.get(durationKey) !== false
-          }
-          if (typeof p.onlineClassDurations === 'object') {
-            return p.onlineClassDurations[durationKey] !== false
+          const allowed =
+            p.onlineClassDurations instanceof Map
+              ? p.onlineClassDurations.get(durationKey) !== false
+              : p.onlineClassDurations[durationKey] !== false
+          if (!allowed) {
+            skipDiagnostics.push({ teacherId: tId, name: tName, reason: `duration_disabled:${durationKey}` })
+            continue
           }
         }
-        return true
-      })
 
-      const teacherUserIds = eligibleProfiles.map((p) => p.user._id)
+        // 2. Education level match (both matches all courses; exact subject match prioritized below)
+        if (!teacherMatchesEducationLevel(p, { courseName: resolvedCourseName })) {
+          skipDiagnostics.push({
+            teacherId: tId,
+            name: tName,
+            reason: `level_mismatch(level=${p.educationLevel},course=${resolvedCourseName})`,
+          })
+          continue
+        }
 
-      // Find conflicting busy bookings
-      const busyBookings = await OnlineClassBooking.find({
-        teacherId: { $in: teacherUserIds },
-        status: { $in: ['paid_pending_teacher', 'confirmed', 'in_progress'] },
-        scheduledAt: { $lt: endTime },
-        endTime: { $gt: startTime },
-      }).select('teacherId')
+        const isSubjectMatch = teacherMatchesAcademicCriteria(p, {
+          subjectName: resolvedSubjectName,
+          courseName: resolvedCourseName,
+          gradeName: resolvedGradeName,
+        })
 
-      const busyTeacherIdSet = new Set(
-        busyBookings.filter((b) => b.teacherId).map((b) => b.teacherId!.toString())
-      )
+        // 3. Weekly availability schedule check
+        const windowInfo = isWindowWithinWeeklySchedule(p.weeklySchedule, startTime, duration, {
+          flexibleSingleSlot: true,
+        })
+        if (!windowInfo.available) {
+          skipDiagnostics.push({
+            teacherId: tId,
+            name: tName,
+            reason: `schedule_miss(${windowInfo.weekday}:${windowInfo.startHHMM}-${windowInfo.endHHMM})`,
+          })
+          continue
+        }
 
-      // Format available teachers
-      const availableTeachers = eligibleProfiles
-        .filter((p) => !busyTeacherIdSet.has(p.user._id.toString()))
-        .map((p: any) => {
+        eligibleWithWindow.push({ profile: p, windowInfo, isSubjectMatch })
+      }
+
+      eligibleWithWindow.sort((a, b) => Number(b.isSubjectMatch) - Number(a.isSubjectMatch))
+
+      const teacherUserIds = eligibleWithWindow.map((item) => item.profile.user._id)
+      const now = new Date()
+
+      // 4. Find conflicting active bookings + unexpired temporary payment holds
+      const busyBookings =
+        teacherUserIds.length > 0
+          ? await OnlineClassBooking.find({
+              $or: [
+                { teacherId: { $in: teacherUserIds } },
+                { targetTeacherIds: { $in: teacherUserIds } },
+              ],
+              scheduledAt: { $lt: endTime },
+              endTime: { $gt: startTime },
+              $and: [
+                {
+                  $or: [
+                    { status: { $in: ['paid_pending_teacher', 'confirmed', 'in_progress'] } },
+                    { status: 'pending_payment', waitingExpiresAt: { $gt: now } },
+                  ],
+                },
+              ],
+            })
+              .select('teacherId targetTeacherIds')
+              .lean()
+          : []
+
+      const busyTeacherIdSet = new Set<string>()
+      for (const b of busyBookings as any[]) {
+        if (b.teacherId) busyTeacherIdSet.add(b.teacherId.toString())
+        if (Array.isArray(b.targetTeacherIds)) {
+          for (const tid of b.targetTeacherIds) {
+            if (tid) busyTeacherIdSet.add(tid.toString())
+          }
+        }
+      }
+
+      const availableTeachers = eligibleWithWindow
+        .filter(({ profile }) => !busyTeacherIdSet.has(profile.user._id.toString()))
+        .map(({ profile: p, windowInfo }) => {
           const basePrice = p.onlineClassBasePrice || 500000
           const calculatedPrice = OnlineClassService.calculatePrice(basePrice, duration)
 
@@ -130,12 +334,24 @@ export class StudentOnlineClassController {
             rating: p.rating || 5.0,
             ratingsCount: p.ratingsCount || 0,
             experienceYears: p.experienceYears || 0,
+            teachingSubjects: p.teachingSubjects || [],
+            educationLevel: p.educationLevel || 'both',
             basePrice90Min: basePrice,
             calculatedPrice,
             durationMinutes: duration,
+            scheduledAt: startTime.toISOString(),
+            endTime: endTime.toISOString(),
+            startTimeTehran: windowInfo.startHHMM,
+            endTimeTehran: windowInfo.endHHMM,
+            weekday: windowInfo.weekday,
+            canBook: true,
             availabilityStatus: p.availabilityStatus || 'online',
           }
         })
+
+      logger.info(
+        `[OnlineClassSearch] course="${resolvedCourseName}" grade="${resolvedGradeName}" subject="${resolvedSubjectName}" start="${startTime.toISOString()}" dur=${duration}m -> checked=${profiles.length}, matched=${availableTeachers.length}, skipped=${JSON.stringify(skipDiagnostics.slice(0, 10))}`
+      )
 
       return res.json({ success: true, data: availableTeachers })
     } catch (error: any) {
@@ -172,7 +388,7 @@ export class StudentOnlineClassController {
 
   /**
    * POST /api/student/online-classes/book
-   * Book an online class session with mock payment
+   * Atomically validates weekly schedule + overlap lock, creates booking and requester OnlineClassMembership.
    */
   static async createBooking(req: Request, res: Response) {
     try {
@@ -188,12 +404,14 @@ export class StudentOnlineClassController {
         topic,
         description,
         scheduledAt,
+        date,
+        startTime: startTimeInput,
         durationMinutes,
         capacity = 1,
         isMockPayment = true,
       } = req.body
 
-      if (!teacherId || !subjectName || !topic || !scheduledAt || !durationMinutes) {
+      if (!teacherId || !subjectName || !topic || (!scheduledAt && !(date && startTimeInput)) || !durationMinutes) {
         return res.status(400).json({
           success: false,
           message: 'انتخاب معلم، درس، موضوع، تاریخ و مدت کلاس الزامی است.',
@@ -205,8 +423,12 @@ export class StudentOnlineClassController {
         return res.status(400).json({ success: false, message: 'مدت کلاس نامعتبر است.' })
       }
 
-      const startTime = new Date(scheduledAt)
-      if (isNaN(startTime.getTime()) || startTime.getTime() < Date.now() - 60000) {
+      const startTime = resolveRequestedDateTime({
+        scheduledAt,
+        date,
+        startTime: startTimeInput,
+      })
+      if (!startTime || getTehranTimeParts(startTime).dateKey < getTehranTimeParts(new Date()).dateKey) {
         return res.status(400).json({
           success: false,
           message: 'زمان شروع کلاس باید در آینده باشد.',
@@ -226,101 +448,292 @@ export class StudentOnlineClassController {
 
       const teacherUserId = (teacherProfile.user as any)._id
 
-      // Check conflict
-      const conflict = await OnlineClassBooking.findOne({
-        teacherId: teacherUserId,
-        status: { $in: ['paid_pending_teacher', 'confirmed', 'in_progress'] },
-        scheduledAt: { $lt: endTime },
-        endTime: { $gt: startTime },
-      })
-
-      if (conflict) {
-        return res.status(409).json({
-          success: false,
-          message: 'استاد محترم در این بازه زمانی کلاس رزرو شده دیگری دارند. لطفاً زمان دیگری را انتخاب کنید.',
+      const lockResult = await withTeacherBookingLock(teacherUserId.toString(), async () => {
+        // Re-fetch latest profile & validate weekly availability window inside lock
+        const freshProfile = await TeacherProfile.findById(teacherProfile._id).lean()
+        const windowCheck = isWindowWithinWeeklySchedule(freshProfile?.weeklySchedule, startTime, duration, {
+          flexibleSingleSlot: true,
         })
-      }
-
-      // Calculate quote
-      const basePrice90Min = teacherProfile.onlineClassBasePrice || 500000
-      const quote = OnlineClassService.calculateQuote({
-        basePrice90Min,
-        durationMinutes: duration,
-        capacity: Number(capacity) || 1,
-      })
-
-      // Generate unique booking code
-      const bookingCode = `CLS-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`
-      const meetingInfo = OnlineClassService.generateMeetingInfo(bookingCode)
-
-      let tx: any = null
-      let paymentStatus: any = {
-        isPaid: false,
-        paymentMethod: 'mock_sandbox',
-        trackingCode: '',
-      }
-
-      let bookingStatus: any = 'pending_payment'
-
-      // In development / sandbox mode, process payment automatically
-      if (isMockPayment) {
-        paymentStatus = {
-          isPaid: true,
-          paidAt: new Date(),
-          paymentMethod: 'mock_sandbox',
-          trackingCode: `PAY-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
+        if (!windowCheck.available) {
+          return {
+            statusCode: 400,
+            body: {
+              success: false,
+              message:
+                'زمان و مدت انتخابی در بازه کاری هفتگی استاد قرار ندارد. لطفاً زمان یا مدت دیگری را انتخاب کنید.',
+            },
+          }
         }
-        bookingStatus = 'paid_pending_teacher'
-      }
 
-      const booking = await OnlineClassBooking.create({
-        bookingCode,
-        studentId,
-        teacherId: teacherUserId,
-        courseId: courseId || undefined,
-        courseName: courseName || '',
-        gradeId: gradeId || undefined,
-        gradeName: gradeName || '',
-        subjectId: subjectId || undefined,
-        subjectName,
-        topic: topic.trim(),
-        description: description ? description.trim() : '',
-        scheduledAt: startTime,
-        durationMinutes: duration,
-        endTime,
-        capacity: quote.capacity,
-        pricing: quote,
-        status: bookingStatus,
-        payment: paymentStatus,
-        meeting: meetingInfo,
+        const now = new Date()
+        const conflict = await OnlineClassBooking.findOne({
+          $or: [{ teacherId: teacherUserId }, { targetTeacherIds: teacherUserId }],
+          scheduledAt: { $lt: endTime },
+          endTime: { $gt: startTime },
+          $and: [
+            {
+              $or: [
+                { status: { $in: ['paid_pending_teacher', 'confirmed', 'in_progress'] } },
+                { status: 'pending_payment', waitingExpiresAt: { $gt: now } },
+              ],
+            },
+          ],
+        })
+
+        if (conflict) {
+          return {
+            statusCode: 409,
+            body: {
+              success: false,
+              message:
+                'استاد محترم در این بازه زمانی کلاس رزرو شده دیگری دارند. لطفاً زمان دیگری را انتخاب کنید.',
+            },
+          }
+        }
+
+        const basePrice90Min = freshProfile?.onlineClassBasePrice || teacherProfile.onlineClassBasePrice || 500000
+        const quote = OnlineClassService.calculateQuote({
+          basePrice90Min,
+          durationMinutes: duration,
+          capacity: Number(capacity) || 1,
+        })
+
+        const bookingCode = `CLS-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`
+        const meetingInfo = OnlineClassService.generateMeetingInfo(bookingCode)
+
+        let paymentStatus: any = {
+          isPaid: false,
+          paymentMethod: 'mock_sandbox',
+          trackingCode: '',
+        }
+        let bookingStatus: any = 'pending_payment'
+        let waitingExpiresAt: Date | undefined = new Date(Date.now() + 10 * 60 * 1000)
+
+        if (isMockPayment) {
+          paymentStatus = {
+            isPaid: true,
+            paidAt: new Date(),
+            paymentMethod: 'mock_sandbox',
+            trackingCode: `PAY-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
+          }
+          bookingStatus = 'paid_pending_teacher'
+          waitingExpiresAt = undefined
+        }
+
+        const booking = await OnlineClassBooking.create({
+          bookingCode,
+          source: 'booking',
+          title: topic.trim(),
+          studentId,
+          teacherId: teacherUserId,
+          courseId: courseId || undefined,
+          courseName: courseName || '',
+          gradeId: gradeId || undefined,
+          gradeName: gradeName || '',
+          subjectId: subjectId || undefined,
+          subjectName,
+          topic: topic.trim(),
+          description: description ? description.trim() : '',
+          scheduledAt: startTime,
+          durationMinutes: duration,
+          endTime,
+          capacity: quote.capacity,
+          pricing: quote,
+          waitingExpiresAt,
+          status: bookingStatus,
+          payment: paymentStatus,
+          meeting: meetingInfo,
+        })
+
+        const requesterUser = await User.findById(studentId).select('fullName phoneNumber').lean()
+        await OnlineClassMembership.updateOne(
+          { bookingId: booking._id, studentId },
+          {
+            $setOnInsert: {
+              bookingId: booking._id,
+              studentId,
+              phoneNumber: (requesterUser as any)?.phoneNumber,
+              fullName: (requesterUser as any)?.fullName || 'دانش‌آموز',
+              role: 'requester',
+              source: 'booking',
+              status: 'active',
+              joinedAt: new Date(),
+            },
+          },
+          { upsert: true }
+        )
+
+        return {
+          statusCode: 200,
+          body: {
+            success: true,
+            message: 'درخواست کلاس آنلاین با موفقیت ثبت شد و برای معلم ارسال گردید.',
+            data: booking,
+          },
+        }
       })
 
-      return res.json({
-        success: true,
-        message: 'درخواست کلاس آنلاین با موفقیت ثبت شد و برای معلم ارسال گردید.',
-        data: booking,
-      })
+      return res.status(lockResult.statusCode).json(lockResult.body)
     } catch (error: any) {
       console.error('Error creating class booking:', error)
       return res.status(500).json({ success: false, message: error.message || 'خطا در ثبت رزرو' })
     }
   }
 
+  private static async attachClassroomRecordingToBooking(bookingDoc: any) {
+    const plain = typeof bookingDoc.toObject === 'function' ? bookingDoc.toObject() : { ...bookingDoc }
+    try {
+      const session = await ClassroomSession.findOne({
+        $or: [
+          { bookingId: plain._id },
+          ...(plain.bookingCode ? [{ bookingCode: plain.bookingCode }] : []),
+          ...(plain.meeting?.roomId ? [{ roomName: plain.meeting.roomId }] : []),
+        ],
+      }).lean()
+
+      if (session) {
+        const liveRoom = RoomManager.getRoom(session.roomName) || RoomManager.getCompletedRoom(session.roomName)
+        const videoUrl = liveRoom?.recording?.videoUrl || session.recording?.videoUrl
+        const serverLogsCount = liveRoom?.recording?.serverLogs?.length || session.recording?.serverLogs?.length || 0
+        const chatLogsCount = liveRoom?.chatMessages?.length || session.recording?.chatLog?.length || 0
+        const status =
+          liveRoom?.recording?.status && liveRoom.recording.status !== 'idle'
+            ? liveRoom.recording.status
+            : session.recording?.status || 'idle'
+
+        plain.classroomSessionId = session._id
+        plain.classroomRoomName = session.roomName
+        plain.classroomRecording = {
+          hasRecording: Boolean(videoUrl || serverLogsCount > 0 || chatLogsCount > 0),
+          roomId: session.roomName,
+          status,
+          videoUrl,
+          durationSeconds: session.recording?.durationSeconds || session.durationSeconds || 0,
+          expiresAt: session.recording?.expiresAt,
+          serverLogsCount,
+          chatLogsCount,
+        }
+      }
+    } catch {}
+    return plain
+  }
+
+  private static async buildUnifiedStudentBookingView(
+    bookingDoc: any,
+    studentIdStr: string,
+    studentPhone: string | undefined,
+    membershipByBookingId: Map<string, any>
+  ) {
+    const plain = await StudentOnlineClassController.attachClassroomRecordingToBooking(bookingDoc)
+    const idStr = plain._id.toString()
+    const membership = membershipByBookingId.get(idStr)
+
+    const requesterIdStr =
+      typeof plain.studentId === 'object' && plain.studentId?._id
+        ? plain.studentId._id.toString()
+        : plain.studentId?.toString()
+
+    const isRequester = requesterIdStr === studentIdStr
+    const source: 'booking' | 'teacher_invitation' = plain.source || 'booking'
+    const myRole: 'requester' | 'invited' = membership?.role || (isRequester ? 'requester' : 'invited')
+
+    let myMembershipStatus: string = membership?.status || ''
+    if (!myMembershipStatus) {
+      if (isRequester) {
+        myMembershipStatus = 'active'
+      } else {
+        const inv = (plain.invitedStudents || []).find((s: any) => {
+          const sid = typeof s.studentId === 'object' && s.studentId?._id ? s.studentId._id.toString() : s.studentId?.toString()
+          return sid === studentIdStr || (studentPhone && s.phoneNumber === studentPhone)
+        })
+        if (inv) {
+          myMembershipStatus =
+            inv.status === 'accepted'
+              ? 'accepted'
+              : inv.status === 'declined'
+                ? 'declined'
+                : 'pending_invite'
+        }
+      }
+    }
+
+    const isClassJoinableStatus = ['confirmed', 'in_progress'].includes(plain.status)
+    const isMembershipEligible = ['active', 'accepted'].includes(myMembershipStatus)
+
+    return {
+      ...plain,
+      source,
+      title: plain.title || plain.topic || plain.subjectName || 'کلاس آنلاین',
+      myRole,
+      myMembershipStatus: myMembershipStatus || 'active',
+      canJoinLive: isClassJoinableStatus && isMembershipEligible,
+      canRespondInvite:
+        myRole === 'invited' &&
+        (myMembershipStatus === 'pending_invite' || myMembershipStatus === 'invited') &&
+        isClassJoinableStatus,
+      canReplay: plain.status === 'completed' || Boolean(plain.classroomRecording?.hasRecording),
+    }
+  }
+
   /**
    * GET /api/student/online-classes/my-bookings
+   * Unified list of ALL classes the student owns, requested, or was invited to (including teacher virtual classes).
    */
   static async getMyBookings(req: Request, res: Response) {
     try {
       const studentId = (req as any).user?._id
+      const studentPhoneRaw = (req as any).user?.phoneNumber
+      const studentPhone = studentPhoneRaw ? SmsService.normalizePhone(studentPhoneRaw) : undefined
+      await RoomManager.cleanupExpiredRecordings()
+
+      // Sync any pending phone-based memberships to this authenticated student user
+      if (studentPhone) {
+        await OnlineClassMembership.updateMany(
+          { phoneNumber: studentPhone, studentId: { $exists: false } },
+          { $set: { studentId } }
+        ).catch(() => {})
+      }
+
+      const memberships = await OnlineClassMembership.find({
+        $or: [
+          { studentId },
+          ...(studentPhone ? [{ phoneNumber: studentPhone }] : []),
+        ],
+        status: { $ne: 'removed' },
+      }).lean()
+
+      const membershipByBookingId = new Map<string, any>()
+      const memberBookingIds: any[] = []
+      for (const m of memberships) {
+        membershipByBookingId.set(m.bookingId.toString(), m)
+        memberBookingIds.push(m.bookingId)
+      }
 
       const bookings = await OnlineClassBooking.find({
-        $or: [{ studentId }, { 'invitedStudents.studentId': studentId }],
+        $or: [
+          { studentId },
+          { 'invitedStudents.studentId': studentId },
+          ...(studentPhone ? [{ 'invitedStudents.phoneNumber': studentPhone }] : []),
+          ...(memberBookingIds.length > 0 ? [{ _id: { $in: memberBookingIds } }] : []),
+        ],
       })
         .populate('teacherId', 'fullName avatar phoneNumber')
         .populate('studentId', 'fullName avatar phoneNumber')
+        .populate('invitedStudents.studentId', 'fullName avatar phoneNumber')
         .sort({ scheduledAt: -1 })
 
-      return res.json({ success: true, data: bookings })
+      const enriched = await Promise.all(
+        bookings.map((b) =>
+          StudentOnlineClassController.buildUnifiedStudentBookingView(
+            b,
+            studentId.toString(),
+            studentPhone,
+            membershipByBookingId
+          )
+        )
+      )
+
+      return res.json({ success: true, data: enriched })
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message || 'خطای سرور' })
     }
@@ -333,6 +746,9 @@ export class StudentOnlineClassController {
     try {
       const { id } = req.params
       const studentId = (req as any).user?._id
+      const studentPhoneRaw = (req as any).user?.phoneNumber
+      const studentPhone = studentPhoneRaw ? SmsService.normalizePhone(studentPhoneRaw) : undefined
+      await RoomManager.cleanupExpiredRecordings()
 
       const booking = await OnlineClassBooking.findById(id)
         .populate('teacherId', 'fullName avatar phoneNumber')
@@ -343,7 +759,118 @@ export class StudentOnlineClassController {
         return res.status(404).json({ success: false, message: 'رزرو کلاس یافت نشد.' })
       }
 
-      return res.json({ success: true, data: booking })
+      const membership = studentId
+        ? await OnlineClassMembership.findOne({
+            bookingId: booking._id,
+            $or: [
+              { studentId },
+              ...(studentPhone ? [{ phoneNumber: studentPhone }] : []),
+            ],
+          }).lean()
+        : null
+
+      const membershipMap = new Map<string, any>()
+      if (membership) {
+        membershipMap.set(booking._id.toString(), membership)
+      }
+
+      const enriched = studentId
+        ? await StudentOnlineClassController.buildUnifiedStudentBookingView(
+            booking,
+            studentId.toString(),
+            studentPhone,
+            membershipMap
+          )
+        : await StudentOnlineClassController.attachClassroomRecordingToBooking(booking)
+
+      return res.json({ success: true, data: enriched })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message || 'خطای سرور' })
+    }
+  }
+
+  /**
+   * POST /api/student/online-classes/bookings/:id/respond-invite
+   * Accept or decline an invitation to a teacher-created virtual class or group booking.
+   */
+  static async respondToInvite(req: Request, res: Response) {
+    try {
+      const { id } = req.params
+      const { action } = req.body // 'accept' | 'decline'
+      const studentId = (req as any).user?._id
+      const studentPhoneRaw = (req as any).user?.phoneNumber
+      const studentPhone = studentPhoneRaw ? SmsService.normalizePhone(studentPhoneRaw) : undefined
+      const studentName = (req as any).user?.fullName || 'دانش‌آموز'
+
+      if (!['accept', 'decline'].includes(action)) {
+        return res.status(400).json({ success: false, message: 'عملیات نامعتبر است.' })
+      }
+
+      const booking = await OnlineClassBooking.findById(id)
+      if (!booking) {
+        return res.status(404).json({ success: false, message: 'کلاس مورد نظر یافت نشد.' })
+      }
+
+      const invEntry = (booking.invitedStudents || []).find((s) => {
+        const sid = s.studentId?.toString()
+        return sid === studentId.toString() || (studentPhone && s.phoneNumber === studentPhone)
+      })
+
+      const membership = await OnlineClassMembership.findOne({
+        bookingId: booking._id,
+        $or: [
+          { studentId },
+          ...(studentPhone ? [{ phoneNumber: studentPhone }] : []),
+        ],
+      })
+
+      if (!invEntry && !membership) {
+        return res.status(403).json({
+          success: false,
+          message: 'شما دعوت‌نامه‌ای برای این کلاس ندارید.',
+        })
+      }
+
+      const nextMembershipStatus = action === 'accept' ? 'accepted' : 'declined'
+      const nextInviteStatus = action === 'accept' ? 'accepted' : 'declined'
+
+      if (membership) {
+        membership.status = nextMembershipStatus
+        membership.studentId = studentId
+        membership.respondedAt = new Date()
+        await membership.save()
+      } else {
+        await OnlineClassMembership.create({
+          bookingId: booking._id,
+          studentId,
+          phoneNumber: studentPhone,
+          fullName: studentName,
+          role: 'invited',
+          source: booking.source || 'teacher_invitation',
+          status: nextMembershipStatus,
+          joinedAt: new Date(),
+          respondedAt: new Date(),
+        })
+      }
+
+      if (invEntry) {
+        invEntry.studentId = studentId
+        invEntry.status = nextInviteStatus
+        if (action === 'accept') invEntry.acceptedAt = new Date()
+        await booking.save()
+      }
+
+      return res.json({
+        success: true,
+        message:
+          action === 'accept'
+            ? 'دعوت کلاس با موفقیت پذیرفته شد و دسترسی ورود برای شما فعال گردید.'
+            : 'دعوت کلاس رد شد.',
+        data: {
+          bookingId: booking._id,
+          membershipStatus: nextMembershipStatus,
+        },
+      })
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message || 'خطای سرور' })
     }
@@ -368,10 +895,17 @@ export class StudentOnlineClassController {
         return res.status(404).json({ success: false, message: 'رزرو کلاس یافت نشد.' })
       }
 
-      if (booking.studentId.toString() !== currentUserId.toString()) {
+      if (!booking.studentId || booking.studentId.toString() !== currentUserId.toString()) {
         return res.status(403).json({
           success: false,
           message: 'تنها رزروکننده اصلی کلاس امکان دعوت دوستان را دارد.',
+        })
+      }
+
+      if (!['paid_pending_teacher', 'confirmed', 'in_progress'].includes(booking.status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'امکان دعوت دوست فقط برای کلاس‌های فعال و پیش‌رو وجود دارد.',
         })
       }
 
@@ -384,7 +918,7 @@ export class StudentOnlineClassController {
         })
       }
 
-      const cleanPhone = phoneNumber.trim()
+      const cleanPhone = SmsService.normalizePhone(phoneNumber.trim())
 
       // Check if already invited
       const alreadyInvited = booking.invitedStudents.some(
@@ -396,17 +930,37 @@ export class StudentOnlineClassController {
 
       // Check if user exists in database
       const invitedUser = await User.findOne({ phoneNumber: cleanPhone })
+      const resolvedName = fullName?.trim() || invitedUser?.fullName || 'دانش‌آموز مهمان'
 
       booking.invitedStudents.push({
         studentId: invitedUser?._id,
         phoneNumber: cleanPhone,
-        fullName: fullName?.trim() || invitedUser?.fullName || 'دانش‌آموز مهمان',
+        fullName: resolvedName,
         status: invitedUser ? 'accepted' : 'invited',
         invitedAt: new Date(),
         acceptedAt: invitedUser ? new Date() : undefined,
       })
 
       await booking.save()
+
+      await OnlineClassMembership.updateOne(
+        invitedUser
+          ? { bookingId: booking._id, studentId: invitedUser._id }
+          : { bookingId: booking._id, phoneNumber: cleanPhone },
+        {
+          $setOnInsert: {
+            bookingId: booking._id,
+            studentId: invitedUser?._id,
+            phoneNumber: cleanPhone,
+            fullName: resolvedName,
+            role: 'invited',
+            source: booking.source || 'booking',
+            status: invitedUser ? 'accepted' : 'pending_invite',
+            joinedAt: new Date(),
+          },
+        },
+        { upsert: true }
+      )
 
       return res.json({
         success: true,

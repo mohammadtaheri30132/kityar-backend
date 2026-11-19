@@ -59,7 +59,9 @@ export interface IBookingReview {
 
 export interface IOnlineClassBooking extends Document {
   bookingCode: string
-  studentId: Types.ObjectId
+  source: 'booking' | 'teacher_invitation'
+  title?: string
+  studentId?: Types.ObjectId
   teacherId?: Types.ObjectId
   targetTeacherIds?: Types.ObjectId[]
   courseId?: Types.ObjectId
@@ -157,10 +159,21 @@ const onlineClassBookingSchema = new Schema<IOnlineClassBooking>(
       unique: true,
       index: true,
     },
+    source: {
+      type: String,
+      enum: ['booking', 'teacher_invitation'],
+      default: 'booking',
+      index: true,
+    },
+    title: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     studentId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      required: false,
       index: true,
     },
     teacherId: {

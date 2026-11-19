@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
 import { v4 as uuidv4 } from 'uuid'
 import { RoomManager } from '../services/RoomManager.js'
+import { ServerTelemetrySampler } from '../services/ServerTelemetrySampler.js'
 import {
   INativeParticipant,
   ParticipantRole,
@@ -13,6 +14,7 @@ import {
   SignalingIceServer,
 } from '../types/native.types.js'
 import { ClassroomSession } from '../../models/ClassroomSession.js'
+import { SessionSourceAdapter } from '../../adapters/SessionSourceAdapter.js'
 import { User } from '../../../../core/models/User.js'
 import { logger } from '../../../../core/utils/logger.js'
 
@@ -21,6 +23,7 @@ interface AuthenticatedSocket extends WebSocket {
   peerId?: string
   roomId?: string
   userId?: string
+  sessionKey?: string
   name?: string
   role?: ParticipantRole
 }
@@ -139,6 +142,8 @@ export class NativeSignalingServer {
       return this.sendError(ws, 'MISSING_ROOM_ID', 'شناسه کلاس مشخص نشده است')
     }
 
+    ServerTelemetrySampler.recordRoomWs(roomId, 'in', 1)
+
     switch (msg.type) {
       case 'join_room': {
         const token = msg.token || defaultToken
@@ -149,7 +154,9 @@ export class NativeSignalingServer {
           token,
           ticketCode,
           msg.displayName,
-          msg.requestedRole
+          msg.requestedRole,
+          msg.attendeeKey,
+          msg.formAnswers
         )
         break
       }
@@ -206,8 +213,8 @@ export class NativeSignalingServer {
       }
 
       case 'teacher_set_permission': {
-        if (!ws.peerId || ws.role !== 'teacher') {
-          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها معلم کلاس امکان تغییر دسترسی‌ها را دارد')
+        if (!this.isManagerSocket(ws, roomId)) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیر جلسه امکان تغییر دسترسی‌ها را دارد')
         }
         if (!msg.targetPeerId) return
         this.handleTeacherSetPermission(roomId, msg.targetPeerId, !!msg.micBlocked)
@@ -215,16 +222,16 @@ export class NativeSignalingServer {
       }
 
       case 'teacher_mute_all': {
-        if (!ws.peerId || ws.role !== 'teacher') {
-          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها معلم کلاس امکان قطع صدای همه را دارد')
+        if (!this.isManagerSocket(ws, roomId)) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیر جلسه امکان قطع صدای همه را دارد')
         }
         this.handleTeacherMuteAll(roomId)
         break
       }
 
       case 'teacher_remove_participant': {
-        if (!ws.peerId || ws.role !== 'teacher') {
-          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها معلم کلاس امکان اخراج اعضا را دارد')
+        if (!this.isManagerSocket(ws, roomId)) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیر جلسه امکان اخراج اعضا را دارد')
         }
         if (!msg.targetPeerId) return
         this.handleTeacherRemoveParticipant(roomId, msg.targetPeerId)
@@ -232,10 +239,134 @@ export class NativeSignalingServer {
       }
 
       case 'teacher_end_room': {
-        if (!ws.peerId || ws.role !== 'teacher') {
-          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها معلم کلاس امکان خاتمه کلاس را دارد')
+        if (!this.isManagerSocket(ws, roomId)) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیر جلسه امکان خاتمه جلسه را دارد')
         }
-        this.handleTeacherEndRoom(roomId)
+        this.handleTeacherEndRoom(roomId, ws)
+        break
+      }
+
+      case 'start_recording': {
+        if (!ws.peerId || ws.roomId !== roomId) return
+        this.handleStartRecording(ws, roomId)
+        break
+      }
+
+      case 'stop_recording': {
+        if (!ws.peerId || ws.roomId !== roomId) return
+        this.handleStopRecording(ws, roomId)
+        break
+      }
+
+      case 'raise_hand': {
+        if (!ws.peerId || ws.roomId !== roomId) return
+        const raised = typeof msg.enabled === 'boolean' ? msg.enabled : true
+        if (RoomManager.setParticipantHandRaised(roomId, ws.peerId, raised)) {
+          this.broadcastToRoom(roomId, null, {
+            type: 'hand_raise_changed',
+            roomId,
+            payload: { peerId: ws.peerId, raised },
+          })
+        }
+        break
+      }
+
+      case 'grant_speaker':
+      case 'revoke_speaker': {
+        if (!this.isManagerSocket(ws, roomId)) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیران امکان مدیریت سخنرانان را دارند')
+        }
+        if (!msg.targetPeerId) return
+        const isSpeaker = msg.type === 'grant_speaker'
+        const updated = RoomManager.setParticipantSpeaker(roomId, msg.targetPeerId, isSpeaker)
+        if (updated) {
+          this.broadcastToRoom(roomId, null, {
+            type: 'speaker_status_changed',
+            roomId,
+            payload: {
+              peerId: msg.targetPeerId,
+              isSpeaker,
+              micState: updated.micState,
+              cameraEnabled: updated.cameraEnabled,
+              handRaised: updated.handRaised,
+            },
+          })
+        }
+        break
+      }
+
+      case 'grant_moderator':
+      case 'revoke_moderator': {
+        if (!this.isManagerSocket(ws, roomId)) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیر جلسه امکان اعطای دسترسی مدیریت را دارد')
+        }
+        if (!msg.targetPeerId) return
+        const isModerator = msg.type === 'grant_moderator'
+        const updated = RoomManager.setParticipantModerator(roomId, msg.targetPeerId, isModerator)
+        if (updated) {
+          this.broadcastToRoom(roomId, null, {
+            type: 'moderator_status_changed',
+            roomId,
+            payload: {
+              peerId: msg.targetPeerId,
+              isModerator,
+              isSpeaker: updated.isSpeaker,
+              micState: updated.micState,
+              cameraEnabled: updated.cameraEnabled,
+            },
+          })
+          // Send live attendees & form answers snapshot immediately if promoted to Manager
+          if (isModerator) {
+            const targetWs = this.clients.get(msg.targetPeerId)
+            if (targetWs) {
+              this.sendAttendeesSnapshotToManagers(roomId, targetWs)
+            }
+          }
+        }
+        break
+      }
+
+      case 'create_poll': {
+        if (!this.isManagerSocket(ws, roomId) || !ws.peerId) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیر جلسه امکان ساخت نظرسنجی را دارد')
+        }
+        const poll = RoomManager.createPoll(
+          roomId,
+          { peerId: ws.peerId, name: ws.name || 'مدیر' },
+          {
+            question: msg.payload?.question || msg.text || '',
+            options: Array.isArray(msg.payload?.options) ? msg.payload.options : [],
+            allowMultiple: !!msg.payload?.allowMultiple,
+          }
+        )
+        if (!poll) {
+          return this.sendError(ws, 'INVALID_POLL', 'سوال نظرسنجی و حداقل ۲ گزینه الزامی است')
+        }
+        this.broadcastPollsToRoom(roomId)
+        break
+      }
+
+      case 'vote_poll': {
+        if (!ws.peerId || ws.roomId !== roomId) return
+        const room = RoomManager.getRoom(roomId)
+        const p = room?.participants.get(ws.peerId)
+        const voterKey = p?.attendeeKey || ws.userId || ws.peerId
+        const pollId = msg.payload?.pollId
+        const optionIds = Array.isArray(msg.payload?.optionIds) ? msg.payload.optionIds : []
+        if (pollId && RoomManager.votePoll(roomId, pollId, voterKey, optionIds)) {
+          this.broadcastPollsToRoom(roomId)
+        }
+        break
+      }
+
+      case 'close_poll': {
+        if (!this.isManagerSocket(ws, roomId)) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیر جلسه امکان بستن نظرسنجی را دارد')
+        }
+        const pollId = msg.payload?.pollId
+        if (pollId && RoomManager.closePoll(roomId, pollId)) {
+          this.broadcastPollsToRoom(roomId)
+        }
         break
       }
 
@@ -255,19 +386,22 @@ export class NativeSignalingServer {
     token?: string | null,
     ticketCode?: string | null,
     clientDisplayName?: string,
-    requestedRole?: 'teacher' | 'student'
+    requestedRole?: 'teacher' | 'student',
+    attendeeKey?: string,
+    formAnswers?: Record<string, any>
   ) {
     // Clean up previous peer state if this socket was already in a room
     if (ws.peerId && ws.roomId) {
       this.handleDisconnect(ws)
     }
 
-    // Resolve canonical roomId if caller passed a session _id or invite ticketCode as roomId
+    let matchedUiMode: 'online_class' | 'seminar' = 'online_class'
+    let matchedSession: any = null
+    // Resolve canonical roomId if caller passed a session _id, bookingId, or invite ticketCode as roomId
     if (mongoose.connection.readyState === 1) {
       try {
-        let matchedSession: any = null
         if (mongoose.isValidObjectId(roomId)) {
-          matchedSession = await ClassroomSession.findById(roomId).lean()
+          matchedSession = await ClassroomSession.findOne({ $or: [{ _id: roomId }, { bookingId: roomId }] }).lean()
         } else {
           matchedSession = await ClassroomSession.findOne({
             $or: [
@@ -282,26 +416,53 @@ export class NativeSignalingServer {
           if (!ticketCode && matchedSession.inviteTickets?.some((t: any) => t.ticketCode === roomId)) {
             ticketCode = roomId
           }
+          if (matchedSession.uiMode === 'seminar') {
+            matchedUiMode = 'seminar'
+          }
           roomId = matchedSession.roomName || roomId
         }
       } catch (e) {}
     }
 
-    const isExplicitTestRoom = roomId.toLowerCase().includes('test') || roomId.startsWith('test')
-    const activeList = RoomManager.getActiveParticipantsList(roomId)
-    const hasTeacher = activeList.some(p => p.role === 'teacher' || p.isTeacher)
-
-    if (requestedRole === 'teacher' && hasTeacher) {
-      return this.sendError(
-        ws,
-        'TEACHER_ALREADY_PRESENT',
-        'در حال حاضر یک معلم در کلاس حضور دارد و امکان ورود معلم دوم وجود ندارد. لطفاً به عنوان دانش‌آموز وارد شوید.'
-      )
-    }
+    const normalizedRoomLower = roomId.toLowerCase()
+    const isExplicitTestRoom =
+      !matchedSession &&
+      (normalizedRoomLower === 'test-room' ||
+        normalizedRoomLower.startsWith('test-') ||
+        normalizedRoomLower.startsWith('demo-'))
 
     let authUser: { userId?: string; name: string; role: ParticipantRole } | null = null
+    let sessionKey: string | undefined
 
-    if (token && !isExplicitTestRoom) {
+    // Check explicit ticketCode first so personal links & host tickets bind their exact role/userId
+    if (ticketCode && mongoose.connection.readyState === 1) {
+      try {
+        const sessionForTicket =
+          matchedSession ||
+          (await ClassroomSession.findOne({
+            roomName: roomId,
+            'inviteTickets.ticketCode': ticketCode,
+          }).lean())
+        const ticket = sessionForTicket?.inviteTickets?.find((t: any) => t.ticketCode === ticketCode)
+        if (ticket) {
+          const ticketUserId = ticket.userId ? ticket.userId.toString() : undefined
+          authUser = {
+            userId: ticketUserId,
+            name: clientDisplayName?.trim() || ticket.name || (ticket.role === 'teacher' ? 'استاد کلاس' : 'دانش‌آموز'),
+            role: (ticket.role as ParticipantRole) || 'student',
+          }
+          sessionKey = ticketUserId ? `user:${ticketUserId}` : `ticket:${ticket.ticketCode}`
+        } else if (!isExplicitTestRoom) {
+          return this.sendError(ws, 'INVALID_TICKET', 'لینک یا بلیت ورود به کلاس نامعتبر است.')
+        }
+      } catch (err) {
+        logger.warn('[Signaling] Error checking ticket:', err)
+      }
+    } else if (ticketCode && !isExplicitTestRoom) {
+      return this.sendError(ws, 'INVALID_TICKET', 'لینک یا بلیت ورود به کلاس نامعتبر است.')
+    }
+
+    if (!authUser && token && !isExplicitTestRoom) {
       try {
         const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'default-secret')
         const targetId = decoded.userId || decoded.id
@@ -327,30 +488,42 @@ export class NativeSignalingServer {
             role: decoded.role as ParticipantRole,
           }
         }
+
+        if (authUser) {
+          const authed = authUser
+          if (matchedSession?.sourceType === 'online_class_booking') {
+            const bookingSource = matchedSession.bookingId
+              ? await SessionSourceAdapter.resolveSource(matchedSession.bookingId.toString())
+              : null
+            const allowed =
+              authed.role === 'admin' ||
+              matchedSession.teacherId?.toString() === authed.userId ||
+              matchedSession.studentId?.toString() === authed.userId ||
+              (matchedSession.invitedStudentIds || []).some((id: any) => id.toString() === authed.userId) ||
+              (bookingSource ? await bookingSource.canAccess(authed.userId || '', authed.role) : false)
+            if (!allowed) {
+              return this.sendError(ws, 'UNAUTHORIZED', 'شما مجاز به ورود به این کلاس آنلاین نیستید.')
+            }
+          }
+          if (authed.userId) {
+            sessionKey = `user:${authed.userId}`
+          }
+        }
       } catch (e) {
         logger.warn(`[Signaling] Token validation failed, falling back if possible`)
       }
     }
 
-    if (!authUser && ticketCode && mongoose.connection.readyState === 1) {
-      try {
-        const session = await ClassroomSession.findOne({
-          roomName: roomId,
-          'inviteTickets.ticketCode': ticketCode,
-        }).lean()
-        if (session && session.inviteTickets) {
-          const ticket = session.inviteTickets.find((t: any) => t.ticketCode === ticketCode)
-          if (ticket) {
-            authUser = {
-              name: clientDisplayName || ticket.name || 'مهمان',
-              role: (ticket.role as ParticipantRole) || 'student',
-            }
-          }
-        }
-      } catch (err) {
-        logger.warn('[Signaling] Error checking ticket:', err)
-      }
+    if (!authUser && matchedSession?.sourceType === 'online_class_booking' && !isExplicitTestRoom) {
+      return this.sendError(
+        ws,
+        'UNAUTHORIZED',
+        'برای ورود به این کلاس آنلاین باید از طریق لینک اختصاصی خود یا اپلیکیشن وارد شوید.'
+      )
     }
+
+    const activeList = RoomManager.getActiveParticipantsList(roomId)
+    const hasTeacher = activeList.some(p => p.role === 'teacher' || p.isTeacher)
 
     // Allow test rooms OR fallback guest entry so classroom never fails in testing
     const isTestRoom = isExplicitTestRoom || !authUser
@@ -358,7 +531,8 @@ export class NativeSignalingServer {
       let role: ParticipantRole = 'student'
       if (requestedRole === 'teacher') {
         role = 'teacher'
-      } else if (requestedRole === 'student') {
+      } else if (requestedRole === 'student' || matchedUiMode === 'seminar') {
+        // In seminar mode, public attendees always enter as audience/student unless presenting a host ticket
         role = 'student'
       } else {
         role = !hasTeacher ? 'teacher' : 'student'
@@ -369,7 +543,7 @@ export class NativeSignalingServer {
         userId: `guest_${Date.now()}_${randomSuffix}`,
         name:
           clientDisplayName?.trim() ||
-          (role === 'teacher' ? `مدرس (${randomSuffix})` : `دانش‌آموز (${randomSuffix})`),
+          (role === 'teacher' ? `مدرس (${randomSuffix})` : `شرکت‌کننده (${randomSuffix})`),
         role,
       }
       logger.info(`[Signaling] Joined room ${roomId} as ${authUser.name} (${authUser.role})`)
@@ -379,8 +553,22 @@ export class NativeSignalingServer {
       return this.sendError(ws, 'UNAUTHORIZED', 'احراز هویت انجام نشد.')
     }
 
-    // Single teacher enforcement across all rooms
-    if (authUser.role === 'teacher' && hasTeacher) {
+    const room = await RoomManager.getOrCreateRoom(roomId)
+    if (room.status === 'ended') {
+      return this.sendError(ws, 'ROOM_ENDED', 'این جلسه به پایان رسیده است.')
+    }
+
+    // Last-device-wins: kick any older open socket belonging to the same user/ticket before teacher presence check
+    if (sessionKey) {
+      this.evictDuplicateSessions(roomId, sessionKey, ws, authUser.name)
+    }
+
+    const hasOtherTeacher = RoomManager.getActiveParticipantsList(roomId).some(
+      p => p.role === 'teacher' || p.isTeacher
+    )
+
+    // Single teacher enforcement in interactive classes (multiple managers allowed in seminars)
+    if (matchedUiMode !== 'seminar' && authUser.role === 'teacher' && hasOtherTeacher) {
       return this.sendError(
         ws,
         'TEACHER_ALREADY_PRESENT',
@@ -388,12 +576,8 @@ export class NativeSignalingServer {
       )
     }
 
-    const room = await RoomManager.getOrCreateRoom(roomId)
-    if (room.status === 'ended') {
-      return this.sendError(ws, 'ROOM_ENDED', 'این کلاس توسط معلم به پایان رسیده است.')
-    }
-
-    if (authUser.role === 'teacher' && !room.teacherId && authUser.userId) {
+    const isPrimaryManager = authUser.role === 'teacher' || authUser.role === 'admin'
+    if (isPrimaryManager && !room.teacherId && authUser.userId) {
       room.teacherId = authUser.userId
     }
 
@@ -401,30 +585,38 @@ export class NativeSignalingServer {
     ws.peerId = peerId
     ws.roomId = roomId
     ws.userId = authUser.userId
+    ws.sessionKey = sessionKey
     ws.name = authUser.name
     ws.role = authUser.role
 
+    const effectiveUiMode = room.uiMode || matchedUiMode
+    const isSeminarAudience = effectiveUiMode === 'seminar' && !isPrimaryManager
     const participant: INativeParticipant = {
       peerId,
       userId: authUser.userId,
+      attendeeKey: attendeeKey?.trim() || undefined,
       name: authUser.name,
       role: authUser.role,
-      micState: 'disabled',
+      micState: isSeminarAudience ? 'blocked' : 'disabled',
       cameraEnabled: false,
+      handRaised: false,
+      isSpeaker: isPrimaryManager,
+      isModerator: isPrimaryManager,
       connectionState: 'connected',
       joinedAt: Date.now(),
-      isTeacher: authUser.role === 'teacher',
+      isTeacher: isPrimaryManager,
     }
 
-    const added = RoomManager.addParticipant(roomId, participant)
+    const { added, autoStartedRecording } = RoomManager.addParticipant(roomId, participant, formAnswers)
     if (!added) {
-      return this.sendError(ws, 'ROOM_FULL', 'ظرفیت کلاس تکمیل شده است.')
+      return this.sendError(ws, 'ROOM_FULL', 'ظرفیت جلسه تکمیل شده است.')
     }
 
     this.clients.set(peerId, ws)
 
     const existingParticipants = Array.from(room.participants.values()).filter(p => p.peerId !== peerId)
     const iceServers = this.getIceServers()
+    const myVoterKey = participant.attendeeKey || participant.userId || participant.peerId
 
     this.sendMessage(ws, {
       type: 'room_joined',
@@ -435,11 +627,17 @@ export class NativeSignalingServer {
         iceServers,
         whiteboard: room.whiteboard,
         chatMessages: room.chatMessages || [],
+        polls: RoomManager.serializePolls(room.polls, myVoterKey),
+        attendees: isPrimaryManager ? RoomManager.getAttendanceSnapshot(roomId) : undefined,
+        isTestRoom: room.isTestRoom,
+        recording: this.serializeRecordingState(room),
         room: {
           roomId: room.roomId,
           title: room.title,
+          uiMode: effectiveUiMode,
           status: room.status,
           maxParticipants: room.maxParticipants,
+          isTestRoom: room.isTestRoom,
         },
       },
     })
@@ -450,7 +648,67 @@ export class NativeSignalingServer {
       payload: { participant },
     })
 
+    // Notify all active Managers in this seminar with updated attendance + form answers
+    if (effectiveUiMode === 'seminar') {
+      this.sendAttendeesSnapshotToManagers(roomId)
+    }
+
+    if (autoStartedRecording || room.recording.isRecording) {
+      this.broadcastRecordingState(roomId)
+    }
+
     logger.info(`[Signaling] ${participant.name} (${participant.role}) joined room ${roomId} as peer ${peerId}`)
+  }
+
+  public serializeRecordingState(room: any) {
+    if (!room || !room.recording) return null
+    return {
+      isRecording: !!room.recording.isRecording,
+      mode: room.recording.mode,
+      status: room.recording.status,
+      startedAt: room.recording.startedAt,
+      endedAt: room.recording.endedAt,
+      recorderPeerId: room.recording.recorderPeerId,
+      videoUrl: room.recording.videoUrl,
+      chunksCount: room.recording.chunksCount || 0,
+      fileSize: room.recording.fileSize || 0,
+      isTestRoom: !!room.isTestRoom,
+    }
+  }
+
+  public broadcastRecordingState(roomId: string) {
+    const room = RoomManager.getRoom(roomId) || RoomManager.getCompletedRoom(roomId)
+    if (!room) return
+    this.broadcastToRoom(roomId, null, {
+      type: 'recording_state_changed',
+      roomId,
+      payload: this.serializeRecordingState(room),
+    })
+  }
+
+  private handleStartRecording(ws: AuthenticatedSocket, roomId: string) {
+    const room = RoomManager.getRoom(roomId)
+    if (!room) return
+    RoomManager.startRecording(roomId, room.isTestRoom ? 'manual_test' : 'auto', {
+      peerId: ws.peerId,
+      name: ws.name || 'کاربر',
+      role: (ws.role as any) || 'teacher',
+    })
+    if (ws.peerId) {
+      room.recording.recorderPeerId = ws.peerId
+    }
+    this.broadcastRecordingState(roomId)
+  }
+
+  private handleStopRecording(ws: AuthenticatedSocket, roomId: string) {
+    const room = RoomManager.getRoom(roomId)
+    if (!room) return
+    RoomManager.stopRecording(roomId, {
+      peerId: ws.peerId,
+      name: ws.name || 'کاربر',
+      role: (ws.role as any) || 'teacher',
+    })
+    this.broadcastRecordingState(roomId)
   }
 
   private handleSetMicrophone(ws: AuthenticatedSocket, roomId: string, enabled: boolean) {
@@ -526,21 +784,36 @@ export class NativeSignalingServer {
     const fileName = msg.fileName || msg.payload?.fileName
     if (!text && !fileUrl) return
 
-    const chatMsg = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    const now = Date.now()
+    const baseStart = room.recording?.startedAt || room.startedAt || room.createdAt
+    const offsetMs = Math.max(0, now - baseStart)
+
+    const chatMsg: any = {
+      id: `msg_${now}_${Math.random().toString(36).slice(2, 7)}`,
       senderPeerId: ws.peerId,
+      senderId: ws.peerId,
       senderName: ws.name || (ws.role === 'teacher' ? 'معلم' : 'دانش‌آموز'),
       senderRole: ws.role || 'student',
       text,
+      message: text || (fileName ? `[فایل پیوست: ${fileName}]` : ''),
       fileUrl,
       fileName,
-      timestamp: Date.now(),
+      timestamp: now,
+      offsetMs,
     }
 
-    if (!room.chatMessages) room.chatMessages = []
-    room.chatMessages.push(chatMsg)
-    if (room.chatMessages.length > 100) {
-      room.chatMessages = room.chatMessages.slice(-100)
+    RoomManager.appendChatMessage(roomId, {
+      id: chatMsg.id,
+      senderId: ws.peerId,
+      senderName: chatMsg.senderName,
+      senderRole: (ws.role === 'teacher' ? 'teacher' : 'student'),
+      message: chatMsg.message,
+      timestamp: now,
+      offsetMs,
+    })
+
+    if (room.chatMessages.length > 200) {
+      room.chatMessages = room.chatMessages.slice(-200)
     }
 
     this.broadcastToRoom(roomId, null, {
@@ -554,7 +827,7 @@ export class NativeSignalingServer {
     const room = RoomManager.getRoom(roomId)
     if (!room || !ws.peerId) return
 
-    const isTeacher = ws.role === 'teacher'
+    const isTeacher = this.isManagerSocket(ws, roomId)
     const canDraw = isTeacher || room.whiteboard.allowStudentDraw
     const action = msg.action
     const payload = msg.payload || {}
@@ -568,6 +841,7 @@ export class NativeSignalingServer {
           action: 'laser_move',
           peerId: ws.peerId,
           name: ws.name || (isTeacher ? 'معلم' : 'دانش‌آموز'),
+          page: Number(payload.page) || room.whiteboard.currentPage,
           x: payload.x,
           y: payload.y,
           active: payload.active,
@@ -598,6 +872,10 @@ export class NativeSignalingServer {
         room.whiteboard.pages[page] = []
       }
       room.whiteboard.pages[page].push(payload.element)
+      RoomManager.appendWhiteboardTimeline(roomId, 'add_element', {
+        page,
+        element: payload.element,
+      })
       this.broadcastToRoom(roomId, null, {
         type: 'whiteboard_update',
         roomId,
@@ -618,6 +896,10 @@ export class NativeSignalingServer {
           (el: any) => el.id !== payload.elementId
         )
       }
+      RoomManager.appendWhiteboardTimeline(roomId, 'erase_element', {
+        page,
+        elementId: payload.elementId,
+      })
       this.broadcastToRoom(roomId, null, {
         type: 'whiteboard_update',
         roomId,
@@ -636,6 +918,7 @@ export class NativeSignalingServer {
       if (room.whiteboard.pages[page] && room.whiteboard.pages[page].length > 0) {
         room.whiteboard.pages[page].pop()
       }
+      RoomManager.appendWhiteboardTimeline(roomId, 'undo', { page })
       this.broadcastToRoom(roomId, null, {
         type: 'whiteboard_update',
         roomId,
@@ -653,6 +936,15 @@ export class NativeSignalingServer {
     if (action === 'clear_page') {
       const page = Number(payload.page) || room.whiteboard.currentPage
       room.whiteboard.pages[page] = []
+      RoomManager.appendWhiteboardTimeline(roomId, 'clear_page', { page })
+      RoomManager.appendRecordingLog(roomId, {
+        type: 'whiteboard_action',
+        actorId: ws.peerId,
+        actorName: ws.name || 'استاد',
+        actorRole: 'teacher',
+        message: `تخته سفید صفحه ${page} پاک‌سازی شد`,
+        metadata: { action: 'clear_page', page },
+      })
       this.broadcastToRoom(roomId, null, {
         type: 'whiteboard_update',
         roomId,
@@ -668,6 +960,15 @@ export class NativeSignalingServer {
       if (!room.whiteboard.pages[nextPage]) {
         room.whiteboard.pages[nextPage] = []
       }
+      RoomManager.appendWhiteboardTimeline(roomId, 'change_page', { page: nextPage })
+      RoomManager.appendRecordingLog(roomId, {
+        type: 'whiteboard_action',
+        actorId: ws.peerId,
+        actorName: ws.name || 'استاد',
+        actorRole: 'teacher',
+        message: `صفحه تخته سفید به اسلاید ${nextPage} تغییر کرد`,
+        metadata: { action: 'change_page', page: nextPage },
+      })
       this.broadcastToRoom(roomId, null, {
         type: 'whiteboard_update',
         roomId,
@@ -679,6 +980,7 @@ export class NativeSignalingServer {
       })
     } else if (action === 'set_grid') {
       room.whiteboard.gridMode = payload.gridMode || 'grid'
+      RoomManager.appendWhiteboardTimeline(roomId, 'set_grid', { gridMode: room.whiteboard.gridMode })
       this.broadcastToRoom(roomId, null, {
         type: 'whiteboard_update',
         roomId,
@@ -689,6 +991,13 @@ export class NativeSignalingServer {
       })
     } else if (action === 'toggle_student_draw') {
       room.whiteboard.allowStudentDraw = !!payload.allowStudentDraw
+      RoomManager.appendRecordingLog(roomId, {
+        type: 'permission_changed',
+        actorId: ws.peerId,
+        actorName: ws.name || 'استاد',
+        actorRole: 'teacher',
+        message: `دسترسی قلم تخته برای دانش‌آموزان ${room.whiteboard.allowStudentDraw ? 'فعال شد ✏️' : 'غیرفعال شد'}`,
+      })
       this.broadcastToRoom(roomId, null, {
         type: 'whiteboard_update',
         roomId,
@@ -713,6 +1022,14 @@ export class NativeSignalingServer {
       if (payload.currentPage) {
         room.whiteboard.currentPage = Number(payload.currentPage)
       }
+      RoomManager.appendRecordingLog(roomId, {
+        type: 'whiteboard_action',
+        actorId: ws.peerId,
+        actorName: ws.name || 'استاد',
+        actorRole: 'teacher',
+        message: `فایل آموزشی «${payload.fileName || 'اسلاید'}» روی تخته بارگذاری شد`,
+        metadata: { fileName: payload.fileName },
+      })
       this.broadcastToRoom(roomId, null, {
         type: 'whiteboard_update',
         roomId,
@@ -775,6 +1092,17 @@ export class NativeSignalingServer {
   }
 
   private handleTeacherRemoveParticipant(roomId: string, targetPeerId: string) {
+    const room = RoomManager.getRoom(roomId)
+    const target = room?.participants.get(targetPeerId)
+    if (target) {
+      RoomManager.appendRecordingLog(roomId, {
+        type: 'participant_removed',
+        actorId: target.peerId,
+        actorName: target.name,
+        actorRole: target.role,
+        message: `کاربر «${target.name}» توسط استاد از کلاس اخراج شد`,
+      })
+    }
     const targetWs = this.clients.get(targetPeerId)
     if (targetWs) {
       this.sendMessage(targetWs, {
@@ -787,8 +1115,12 @@ export class NativeSignalingServer {
     this.handleParticipantLeft(roomId, targetPeerId, 'REMOVED_BY_TEACHER')
   }
 
-  private handleTeacherEndRoom(roomId: string) {
-    RoomManager.endRoom(roomId)
+  private handleTeacherEndRoom(roomId: string, ws?: AuthenticatedSocket) {
+    RoomManager.endRoom(roomId, {
+      peerId: ws?.peerId,
+      name: ws?.name || 'استاد',
+      role: 'teacher',
+    })
 
     this.broadcastToRoom(roomId, null, {
       type: 'room_ended',
@@ -804,12 +1136,48 @@ export class NativeSignalingServer {
     })
   }
 
+  private evictDuplicateSessions(
+    roomId: string,
+    sessionKey: string,
+    currentWs: AuthenticatedSocket,
+    incomingName: string
+  ) {
+    for (const [existingPeerId, existingWs] of Array.from(this.clients.entries())) {
+      if (existingWs !== currentWs && existingWs.roomId === roomId && existingWs.sessionKey === sessionKey) {
+        RoomManager.appendRecordingLog(roomId, {
+          type: 'participant_removed',
+          actorId: existingPeerId,
+          actorName: existingWs.name || incomingName,
+          actorRole: existingWs.role || 'student',
+          message: `اتصال قبلی «${existingWs.name || incomingName}» به دلیل ورود با دستگاه جدید قطع شد`,
+        })
+        this.sendMessage(existingWs, {
+          type: 'participant_removed',
+          roomId,
+          payload: {
+            code: 'DUPLICATE_DEVICE',
+            reason: 'شما با دستگاه یا مرورگر دیگری وارد این کلاس شدید؛ اتصال این دستگاه قطع شد.',
+          },
+        })
+        existingWs.peerId = undefined
+        existingWs.roomId = undefined
+        existingWs.sessionKey = undefined
+        this.clients.delete(existingPeerId)
+        this.handleParticipantLeft(roomId, existingPeerId, 'REPLACED_BY_NEW_DEVICE')
+        try {
+          existingWs.close(4001, 'DUPLICATE_DEVICE')
+        } catch {}
+      }
+    }
+  }
+
   private handleDisconnect(ws: AuthenticatedSocket) {
     const peerId = ws.peerId
     const roomId = ws.roomId
     if (peerId && roomId) {
       ws.peerId = undefined
       ws.roomId = undefined
+      ws.sessionKey = undefined
       this.clients.delete(peerId)
       this.handleParticipantLeft(roomId, peerId, 'DISCONNECTED')
     }
@@ -823,6 +1191,13 @@ export class NativeSignalingServer {
         roomId,
         payload: { peerId, reason },
       })
+      const room = RoomManager.getRoom(roomId)
+      if (room && room.recording.isRecording) {
+        this.broadcastRecordingState(roomId)
+      }
+      if (room?.uiMode === 'seminar') {
+        this.sendAttendeesSnapshotToManagers(roomId)
+      }
       logger.info(`[Signaling] Peer ${peerId} left room ${roomId} (reason: ${reason})`)
     }
   }
@@ -840,13 +1215,55 @@ export class NativeSignalingServer {
     }
   }
 
+  private isManagerSocket(ws: AuthenticatedSocket, roomId: string): boolean {
+    if (!ws.peerId || ws.roomId !== roomId) return false
+    if (ws.role === 'teacher' || ws.role === 'admin') return true
+    const p = RoomManager.getRoom(roomId)?.participants.get(ws.peerId)
+    return !!(p?.isModerator || p?.isTeacher)
+  }
+
+  private broadcastPollsToRoom(roomId: string) {
+    const room = RoomManager.getRoom(roomId)
+    if (!room) return
+    this.clients.forEach((client, peerId) => {
+      if (client.roomId === roomId && client.readyState === WebSocket.OPEN) {
+        const p = room.participants.get(peerId)
+        const voterKey = p?.attendeeKey || client.userId || peerId
+        this.sendMessage(client, {
+          type: 'polls_sync',
+          roomId,
+          payload: { polls: RoomManager.serializePolls(room.polls, voterKey) },
+        })
+      }
+    })
+  }
+
+  private sendAttendeesSnapshotToManagers(roomId: string, singleTarget?: AuthenticatedSocket) {
+    const attendees = RoomManager.getAttendanceSnapshot(roomId)
+    const payload = { attendees }
+    if (singleTarget && singleTarget.readyState === WebSocket.OPEN) {
+      this.sendMessage(singleTarget, { type: 'seminar_attendees_sync', roomId, payload })
+      return
+    }
+    this.clients.forEach((client) => {
+      if (client.roomId === roomId && client.readyState === WebSocket.OPEN && this.isManagerSocket(client, roomId)) {
+        this.sendMessage(client, { type: 'seminar_attendees_sync', roomId, payload })
+      }
+    })
+  }
+
   private broadcastToRoom(roomId: string, excludePeerId: string | null, msg: SignalingOutgoingMessage) {
     const json = JSON.stringify({ ...msg, timestamp: Date.now() })
+    let sentCount = 0
     this.clients.forEach((client, peerId) => {
       if (client.roomId === roomId && peerId !== excludePeerId && client.readyState === WebSocket.OPEN) {
         client.send(json)
+        sentCount += 1
       }
     })
+    if (sentCount > 0) {
+      ServerTelemetrySampler.recordRoomWs(roomId, 'out', sentCount)
+    }
   }
 
   private sendMessage(ws: WebSocket, msg: SignalingOutgoingMessage) {

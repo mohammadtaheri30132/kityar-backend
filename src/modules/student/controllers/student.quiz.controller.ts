@@ -5,6 +5,7 @@ import { QuizMission, StudentMissionProgress } from '../../../core/models/QuizMi
 import { CoinTransaction } from '../../../core/models/CoinTransaction.js'
 import { QuizProfile } from '../../../core/models/QuizProfile.js'
 import { Question } from '../../../core/models/Question.js'
+import { QuizCategory, ensureDefaultQuizCategories } from '../../../core/models/QuizCategory.js'
 import { v4 as uuidv4 } from 'uuid'
 
 export class StudentQuizController {
@@ -32,6 +33,8 @@ export class StudentQuizController {
       res.json({
         success: true,
         data: {
+          username: req.user?.username || profile.studentCode || 'بازیکن',
+          fullName: req.user?.fullName || req.user?.username || 'دانش‌آموز نوکیتا',
           coins: profile.coins,
           hearts: profile.hearts,
           maxHearts: config.maxHearts,
@@ -490,6 +493,156 @@ export class StudentQuizController {
           earnedXp,
           personalBest: profile.recordModeBest,
           currentCoins: profile.coins,
+        },
+      })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * دریافت لیست موضوعات فعال کوییز (با آیکون و رنگ)
+   */
+  static async getCategories(_req: AuthRequest, res: Response) {
+    try {
+      await ensureDefaultQuizCategories()
+      const categories = await QuizCategory.find({ isActive: true }).sort({ order: 1, createdAt: 1 }).lean()
+      res.json({ success: true, data: categories })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * دریافت سوالات تایید شده کوییز (با فیلتر اختیاری موضوع)
+   */
+  static async getQuestions(req: AuthRequest, res: Response) {
+    try {
+      const { category } = req.query
+      const filter: Record<string, any> = {
+        type: 'تستی',
+        status: 'تایید-شده',
+        isActive: true,
+      }
+      if (category && typeof category === 'string' && category.trim()) {
+        filter.tags = category.trim()
+      }
+
+      const questions = await Question.find(filter)
+        .select('question options answer explanation tags difficulty createdAt')
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .lean()
+
+      const formatted = questions.map((q: any) => ({
+        id: String(q._id),
+        category: Array.isArray(q.tags) && q.tags.length > 0 ? q.tags[0] : 'اطلاعات عمومی',
+        question: q.question,
+        options: Array.isArray(q.options) ? q.options : [],
+        answer: q.answer,
+        explanation: q.explanation || '',
+        difficulty: q.difficulty || 'متوسط',
+      }))
+
+      res.json({ success: true, data: formatted })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * ثبت سوال جدید از کارخانه سوال اپلیکیشن دانش‌آموز
+   */
+  static async createFactoryQuestion(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user?._id?.toString()
+      const { question, options, answer, category, difficulty = 'متوسط', explanation = '' } = req.body
+
+      if (!question || !Array.isArray(options) || options.length < 2 || !answer || !category) {
+        return res.status(400).json({ success: false, message: 'متن سوال، گزینه‌ها، پاسخ صحیح و موضوع الزامی است' })
+      }
+
+      const catName = String(category).trim()
+      await QuizCategory.findOneAndUpdate(
+        { name: catName },
+        { $setOnInsert: { name: catName, icon: '❓', color: '#7c3aed', isActive: true, order: 99 } },
+        { upsert: true, new: true }
+      )
+
+      const newQ = await Question.create({
+        question: String(question).trim(),
+        type: 'تستی',
+        difficulty,
+        options: options.map((o: any) => String(o).trim()),
+        answer: String(answer).trim(),
+        explanation: String(explanation || '').trim(),
+        tags: [catName],
+        status: 'تایید-شده',
+        isActive: true,
+        createdBy: userId,
+      })
+
+      res.status(201).json({
+        success: true,
+        data: {
+          id: String(newQ._id),
+          category: catName,
+          question: newQ.question,
+          options: newQ.options,
+          answer: newQ.answer,
+          explanation: String(explanation || '').trim(),
+          difficulty: newQ.difficulty,
+        },
+      })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * دریافت لیست ربات‌های فعال تعریف‌شده از پنل ادمین
+   */
+  static async getBots(req: AuthRequest, res: Response) {
+    try {
+      const config = await QuizGameEngineService.getConfig()
+      const activeBots = (config.bots || []).filter((b) => b.isActive !== false)
+      res.json({
+        success: true,
+        data: {
+          bots: activeBots,
+          distribution: config.botDistribution,
+          accuracy: config.botAccuracy,
+        },
+      })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * به‌روزرسانی آواتار و مشخصات پروفایل کوییز
+   */
+  static async updateProfile(req: AuthRequest, res: Response) {
+    try {
+      const userId = req.user?._id?.toString()
+      if (!userId) return res.status(401).json({ success: false, message: 'کاربر احراز نشده است' })
+
+      const { avatar, username } = req.body
+      const profile = await QuizGameEngineService.getOrCreateProfile(userId)
+
+      if (typeof avatar === 'string' && avatar.trim()) {
+        profile.avatar = avatar.trim()
+      }
+      if (typeof username === 'string' && username.trim()) {
+        profile.studentCode = username.trim()
+      }
+
+      await profile.save()
+      res.json({
+        success: true,
+        data: {
+          avatar: profile.avatar,
+          username: req.user?.username || profile.studentCode,
         },
       })
     } catch (error: any) {

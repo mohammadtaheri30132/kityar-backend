@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { protect, teacherOnly } from '../../../core/middleware/auth.js';
 import * as communityController from '../controllers/teacher.community.controller.js';
+import { isVideoUpload, optimizeUploadedVideo } from '../../../core/utils/videoOptimizer.js';
 
 const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'community');
 if (!fs.existsSync(uploadDir)) {
@@ -23,7 +24,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 35 * 1024 * 1024 }, // 35MB limit (supports up to 30MB video)
+  limits: { fileSize: 150 * 1024 * 1024 }, // 150MB raw video/media upload before server compression
 });
 
 const router = Router();
@@ -65,15 +66,34 @@ router.delete('/comments/:commentId', protect, communityController.deleteComment
 // Reporting
 router.post('/report', protect, communityController.submitReport);
 
-// Attachment / Media Upload (with automatic lossless/high-quality image compression)
-router.post('/upload', protect, upload.single('file'), async (req, res) => {
+// Attachment / Media Upload (with automatic image/video optimization on server)
+router.post('/upload', protect, (req, res, next) => {
+  req.setTimeout(300_000);
+  res.setTimeout(300_000);
+  upload.single('file')(req, res, (err: any) => {
+    if (err) {
+      const message =
+        err.code === 'LIMIT_FILE_SIZE'
+          ? 'حجم فایل ارسالی بیشتر از سقف مجاز سرور (۱۵۰ مگابایت) است.'
+          : err.message || 'خطا در دریافت فایل ارسالی';
+      res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ success: false, message });
+      return;
+    }
+    next();
+  });
+}, async (req, res) => {
   if (!req.file) {
     res.status(400).json({ success: false, message: 'هیچ فایلی ارسال نشد' });
     return;
   }
 
   const isImage = req.file.mimetype.startsWith('image/');
-  const isVideo = req.file.mimetype.startsWith('video/');
+  const isVideo = isVideoUpload(req.file.mimetype, req.file.originalname || req.file.filename);
+
+  let finalFilename = req.file.filename;
+  let finalSize = fs.existsSync(req.file.path) ? fs.statSync(req.file.path).size : req.file.size;
+  let thumbnailUrl: string | null = null;
+  let compressed = false;
 
   // Compress image on server if it is an image
   if (isImage) {
@@ -95,24 +115,37 @@ router.post('/upload', protect, upload.single('file'), async (req, res) => {
       if (optSize < origSize) {
         fs.unlinkSync(originalPath);
         fs.renameSync(optimizedPath, originalPath);
+        finalSize = optSize;
+        compressed = true;
       } else {
         fs.unlinkSync(optimizedPath);
       }
-    } catch (compressErr) {
+    } catch {
       // Fallback gracefully to original file if compression encounters any issue
+    }
+  } else if (isVideo) {
+    const videoResult = await optimizeUploadedVideo(req.file.path);
+    finalFilename = videoResult.filename;
+    finalSize = videoResult.size;
+    compressed = videoResult.compressed;
+    if (videoResult.thumbnailFilename) {
+      thumbnailUrl = `/uploads/community/${videoResult.thumbnailFilename}`;
     }
   }
 
-  const fileUrl = `/uploads/community/${req.file.filename}`;
-  const finalSize = fs.existsSync(req.file.path) ? fs.statSync(req.file.path).size : req.file.size;
+  const fileUrl = `/uploads/community/${finalFilename}`;
 
   res.json({
     success: true,
+    url: fileUrl,
+    thumbnailUrl,
     data: {
       url: fileUrl,
+      thumbnailUrl,
       type: isImage ? 'image' : isVideo ? 'video' : 'file',
       name: req.file.originalname,
       size: finalSize,
+      compressed,
     },
   });
 });

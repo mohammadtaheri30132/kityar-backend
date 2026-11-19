@@ -7,10 +7,18 @@ import { Conversation } from '../../../core/models/Conversation.js'
 import { Message } from '../../../core/models/Message.js'
 import { TeacherMaterial } from '../../../core/models/TeacherMaterial.js'
 import { OnlineClass } from '../../../core/models/OnlineClass.js'
+import { OnlineClassBooking } from '../../../core/models/OnlineClassBooking.js'
+import { OnlineClassMembership } from '../../../core/models/OnlineClassMembership.js'
+import { User } from '../../../core/models/User.js'
 import { Classroom } from '../../../core/models/Classroom.js'
 import { TeacherReview } from '../../../core/models/TeacherReview.js'
 import { WalletService } from '../../../core/services/wallet.service.js'
 import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
+import { SmsService } from '../../../core/services/sms.service.js'
+import {
+  extractWeeklyScheduleSummary,
+  validateAndNormalizeWeeklySchedule,
+} from '../../../core/utils/weeklySchedule.js'
 import { Wallet } from '../../../core/models/Wallet.js'
 import { WalletTransaction } from '../../../core/models/WalletTransaction.js'
 
@@ -176,6 +184,7 @@ export class TeacherCenterController {
             teachingGrades: profile.teachingGrades || [],
             educationLevel: profile.educationLevel || 'secondary',
             availableSchedule: profile.availableSchedule || [],
+            weeklySchedule: extractWeeklyScheduleSummary(profile.weeklySchedule).schedule,
           },
         },
       })
@@ -845,19 +854,62 @@ export class TeacherCenterController {
 
   /**
    * POST /api/teacher/center/virtual-classroom
-   * Teacher creates a virtual classroom: 50,000 Tomans per student debited from wallet
+   * Teacher creates a unified online virtual classroom (`source: 'teacher_invitation'`)
+   * and registers invited students in OnlineClassMembership so it appears directly in their "My Classes" list.
    */
   static async createVirtualClassroom(req: Request, res: Response) {
     try {
       const userId = (req as any).user?._id
-      const { name, grade, subject, studentCount = 1, studentPhoneNumbers = [] } = req.body
+      const {
+        name,
+        title,
+        grade,
+        gradeName,
+        subject,
+        subjectName,
+        maxStudents,
+        studentCount,
+        studentPhoneNumbers = [],
+        invitedStudents = [],
+        scheduledAt,
+        durationMinutes = 90,
+      } = req.body
 
-      if (!name) {
+      const resolvedTitle = (title || name || '').trim()
+      const resolvedSubject = (subjectName || subject || 'کلاس عمومی').trim()
+      const resolvedGrade = (gradeName || grade || '').trim()
+
+      if (!resolvedTitle) {
         return res.status(400).json({ success: false, message: 'نام کلاس الزامی است' })
       }
 
-      const count = Math.max(1, Number(studentCount) || (studentPhoneNumbers.length > 0 ? studentPhoneNumbers.length : 1))
-      const totalFee = count * 50000 // 50,000 Tomans per student
+      // Normalize invited student inputs (support both array of strings and array of objects)
+      const normalizedInvites: Array<{ phoneNumber: string; fullName?: string }> = []
+      const seenPhones = new Set<string>()
+      const rawInviteList = [
+        ...(Array.isArray(invitedStudents) ? invitedStudents : []),
+        ...(Array.isArray(studentPhoneNumbers)
+          ? studentPhoneNumbers.map((p: string) => ({ phoneNumber: p }))
+          : []),
+      ]
+      for (const item of rawInviteList) {
+        const rawPhone = typeof item === 'string' ? item : item?.phoneNumber
+        if (!rawPhone || !String(rawPhone).trim()) continue
+        const cleanPhone = SmsService.normalizePhone(String(rawPhone).trim())
+        if (!seenPhones.has(cleanPhone)) {
+          seenPhones.add(cleanPhone)
+          normalizedInvites.push({
+            phoneNumber: cleanPhone,
+            fullName: typeof item === 'object' ? item?.fullName?.trim() : undefined,
+          })
+        }
+      }
+
+      const count = Math.max(
+        1,
+        Number(maxStudents) || Number(studentCount) || (normalizedInvites.length > 0 ? normalizedInvites.length : 1)
+      )
+      const totalFee = OnlineClassService.calculateVirtualClassroomFee(count)
 
       // Check teacher wallet balance
       const wallet = await WalletService.getOrCreateWallet(userId, 'teacher')
@@ -871,32 +923,147 @@ export class TeacherCenterController {
         })
       }
 
+      const startTime = scheduledAt ? new Date(scheduledAt) : new Date()
+      const validDuration = Math.max(15, Math.min(180, Number(durationMinutes) || 90))
+      const endTime = new Date(startTime.getTime() + validDuration * 60000)
+
       // Debit from wallet
       await WalletService.debit({
         userId,
         userType: 'teacher',
         amount: totalFee,
         type: 'class_fee',
-        description: `هزینه ایجاد کلاس مجازی: ${name} (${count} دانش‌آموز)`,
+        description: `هزینه ایجاد کلاس مجازی: ${resolvedTitle} (${count} دانش‌آموز)`,
       })
 
-      // Generate class code
-      const code = Math.floor(10000 + Math.random() * 90000).toString()
+      const bookingCode = `VCL-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`
+      const meetingInfo = OnlineClassService.generateMeetingInfo(bookingCode)
+      const classPublicBase = process.env.CLASSROOM_PUBLIC_URL || 'https://class.kitayar.ir'
+      const joinUrl = `${classPublicBase}/classroom/native/${meetingInfo.roomName}`
 
-      const newClassroom = await Classroom.create({
-        name,
-        grade: grade || '',
-        subject: subject || '',
-        teacher: userId,
-        code,
-        students: studentPhoneNumbers || [],
+      const invitedDocs: any[] = []
+      const membershipDocs: any[] = []
+
+      if (normalizedInvites.length > 0) {
+        const matchedUsers = await User.find({
+          phoneNumber: { $in: normalizedInvites.map((i) => i.phoneNumber) },
+        }).select('_id fullName phoneNumber')
+        const userByPhone = new Map<string, any>(
+          matchedUsers.map((u: any) => [u.phoneNumber, u])
+        )
+
+        for (const inv of normalizedInvites) {
+          const matchedUser = userByPhone.get(inv.phoneNumber)
+          const resolvedName = inv.fullName || matchedUser?.fullName || 'دانش‌آموز دعوت‌شده'
+          invitedDocs.push({
+            studentId: matchedUser?._id,
+            phoneNumber: inv.phoneNumber,
+            fullName: resolvedName,
+            status: 'invited',
+            invitedAt: new Date(),
+          })
+          membershipDocs.push({
+            studentId: matchedUser?._id,
+            phoneNumber: inv.phoneNumber,
+            fullName: resolvedName,
+            role: 'invited',
+            source: 'teacher_invitation',
+            status: 'pending_invite',
+            joinedAt: new Date(),
+          })
+        }
+      }
+
+      const unifiedBooking = await OnlineClassBooking.create({
+        bookingCode,
+        source: 'teacher_invitation',
+        title: resolvedTitle,
+        teacherId: userId,
+        gradeName: resolvedGrade,
+        subjectName: resolvedSubject,
+        topic: resolvedTitle,
+        description: `کلاس مجازی ایجاد شده توسط معلم (حداکثر ${count} دانش‌آموز)`,
+        scheduledAt: startTime,
+        durationMinutes: validDuration,
+        endTime,
         capacity: count,
+        invitedStudents: invitedDocs,
+        pricing: {
+          baseClassPrice: totalFee,
+          extraCapacityCount: 0,
+          extraCapacityFee: 0,
+          subtotal: totalFee,
+          studentServiceFee: 0,
+          totalPrice: totalFee,
+          perStudentShare: 0,
+          teacherEarnings: 0,
+          teacherServiceFee: 0,
+        },
+        status: 'confirmed',
+        payment: {
+          isPaid: true,
+          paidAt: new Date(),
+          paymentMethod: 'wallet',
+          trackingCode: bookingCode,
+        },
+        meeting: meetingInfo,
       })
+
+      if (membershipDocs.length > 0) {
+        for (const m of membershipDocs) {
+          await OnlineClassMembership.updateOne(
+            m.studentId
+              ? { bookingId: unifiedBooking._id, studentId: m.studentId }
+              : { bookingId: unifiedBooking._id, phoneNumber: m.phoneNumber },
+            { $setOnInsert: { ...m, bookingId: unifiedBooking._id } },
+            { upsert: true }
+          )
+        }
+      }
 
       return res.json({
         success: true,
         message: 'کلاس مجازی با موفقیت ایجاد شد و هزینه از کیف پول شما کسر گردید.',
-        data: newClassroom,
+        data: {
+          ...unifiedBooking.toObject(),
+          title: resolvedTitle,
+          joinUrl,
+          invitedCount: membershipDocs.length,
+        },
+      })
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * GET /api/teacher/center/search-student?phone=...
+   * Search student by phone number so teacher can invite registered students to virtual classes
+   */
+  static async searchStudentByPhone(req: Request, res: Response) {
+    try {
+      const { phone } = req.query
+      if (!phone || typeof phone !== 'string') {
+        return res.status(400).json({ success: false, message: 'شماره تلفن الزامی است' })
+      }
+      const cleanPhone = SmsService.normalizePhone(phone)
+      const user = await User.findOne({ phoneNumber: cleanPhone }).select('fullName phoneNumber avatar')
+      if (!user) {
+        return res.json({
+          success: true,
+          exists: false,
+          message: 'دانش‌آموزی با این شماره در نوکیتا یافت نشد (پس از ثبت‌نام، دعوت برای او فعال می‌شود).',
+        })
+      }
+      return res.json({
+        success: true,
+        exists: true,
+        user: {
+          id: user._id,
+          fullName: user.fullName || 'کاربر نوکیتا',
+          phoneNumber: user.phoneNumber,
+          avatar: user.avatar || '',
+        },
       })
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message })
@@ -985,12 +1152,20 @@ export class TeacherCenterController {
         teachingGrades,
         educationLevel,
         availableSchedule,
+        weeklySchedule,
         questionFee,
         onlineClassBasePrice,
         resume,
         headline,
         bio,
       } = req.body
+
+      if (weeklySchedule !== undefined) {
+        const validation = validateAndNormalizeWeeklySchedule(weeklySchedule)
+        if (!validation.valid) {
+          return res.status(400).json({ success: false, message: validation.error })
+        }
+      }
 
       let profile = await TeacherProfile.findOne({ user: userId })
       if (!profile) {
@@ -1001,6 +1176,10 @@ export class TeacherCenterController {
       if (Array.isArray(teachingGrades)) profile.teachingGrades = teachingGrades
       if (educationLevel) profile.educationLevel = educationLevel
       if (Array.isArray(availableSchedule)) profile.availableSchedule = availableSchedule
+      if (weeklySchedule !== undefined) {
+        const validation = validateAndNormalizeWeeklySchedule(weeklySchedule)
+        if (validation.valid) profile.weeklySchedule = validation.schedule
+      }
       if (typeof questionFee === 'number') profile.questionFee = questionFee
       if (typeof onlineClassBasePrice === 'number') profile.onlineClassBasePrice = onlineClassBasePrice
       if (resume) profile.resume = { ...profile.resume, ...resume }

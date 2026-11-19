@@ -12,13 +12,31 @@ export interface IScheduleItem {
   note?: string
 }
 
+export interface IStudyProgressEntry {
+  itemType: 'book' | 'chapter' | 'lesson'
+  itemId: Types.ObjectId
+  stableId: string
+  bookId: Types.ObjectId
+  chapterId?: Types.ObjectId
+  status: 'in_progress' | 'completed' | 'needs_review'
+  mastery: number
+  weakScore: number
+  studyMinutes: number
+  updatedAt: Date
+}
+
 export interface IStudentProfile extends Document {
   user: Types.ObjectId
   studentCode: string // شماره دانش‌آموزی یا کدملی برای ورود
   inviteCode?: string // کد اختصاصی دانش‌آموز برای دعوت دوستان
   invitedBy?: Types.ObjectId // معلمی که این دانش‌آموز را دعوت کرده
   invitedByStudent?: Types.ObjectId // کاربری که این دانش‌آموز با کد دعوت او وارد شده
-  grade?: Types.ObjectId // پایه تحصیلی فعلی
+  grade?: Types.ObjectId // پایه تحصیلی فعلی (قدیمی)
+  eduLevelId?: Types.ObjectId // مقطع در بانک مرکزی نوکیتا
+  eduGradeId?: Types.ObjectId // پایه در بانک مرکزی نوکیتا
+  eduFieldId?: Types.ObjectId | null // رشته در بانک مرکزی نوکیتا
+  selectedBookIds?: Types.ObjectId[] // کتاب‌های انتخاب‌شده
+  studyProgress?: IStudyProgressEntry[] // سوابق مطالعاتی (با تغییر پایه/کتاب حفظ می‌شود)
   teachers: Types.ObjectId[] // لیست معلم‌هایی که این دانش‌آموز را به کلاس خود اضافه کرده‌اند
   weeklySchedule?: IScheduleItem[] // برنامه هفتگی مدرسه
 }
@@ -48,6 +66,39 @@ const studentProfileSchema = new Schema<IStudentProfile>(
       type: Schema.Types.ObjectId,
       ref: 'Grade',
     },
+    eduLevelId: {
+      type: Schema.Types.ObjectId,
+      ref: 'EduLevel',
+    },
+    eduGradeId: {
+      type: Schema.Types.ObjectId,
+      ref: 'EduGrade',
+    },
+    eduFieldId: {
+      type: Schema.Types.ObjectId,
+      ref: 'EduField',
+      default: null,
+    },
+    selectedBookIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'EduBook',
+      },
+    ],
+    studyProgress: [
+      {
+        itemType: { type: String, enum: ['book', 'chapter', 'lesson'], required: true },
+        itemId: { type: Schema.Types.ObjectId, required: true },
+        stableId: { type: String, required: true },
+        bookId: { type: Schema.Types.ObjectId, ref: 'EduBook', required: true },
+        chapterId: { type: Schema.Types.ObjectId, ref: 'EduChapter' },
+        status: { type: String, enum: ['in_progress', 'completed', 'needs_review'], default: 'in_progress' },
+        mastery: { type: Number, default: 0 },
+        weakScore: { type: Number, default: 0 },
+        studyMinutes: { type: Number, default: 0 },
+        updatedAt: { type: Date, default: Date.now },
+      },
+    ],
     teachers: [
       {
         type: Schema.Types.ObjectId,

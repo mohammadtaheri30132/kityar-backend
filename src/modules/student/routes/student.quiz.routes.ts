@@ -10,6 +10,10 @@ router.use(studentOnly)
 
 // اطلاعات پروفایل، لول، سکه، قلب و ریکاوری
 router.get('/profile', StudentQuizController.getProfile)
+router.put('/profile', StudentQuizController.updateProfile)
+
+// دریافت لیست ربات‌های تعریف‌شده از پنل
+router.get('/bots', StudentQuizController.getBots)
 
 // جایزه روزانه
 router.post('/daily-reward/claim', StudentQuizController.claimDailyReward)
@@ -39,5 +43,10 @@ router.post('/store/buy', StudentQuizController.buyStoreItem)
 // حالت رکورد انفرادی
 router.post('/record/start', StudentQuizController.startRecordMode)
 router.post('/record/finish', StudentQuizController.finishRecordMode)
+
+// موضوعات، سوالات و کارخانه سوال (همگام‌سازی با پنل ادمین)
+router.get('/categories', StudentQuizController.getCategories)
+router.get('/questions', StudentQuizController.getQuestions)
+router.post('/factory/create', StudentQuizController.createFactoryQuestion)
 
 export default router

@@ -6,6 +6,7 @@ import { QuizProfile } from '../../../core/models/QuizProfile.js'
 import { CoinTransaction } from '../../../core/models/CoinTransaction.js'
 import { Question } from '../../../core/models/Question.js'
 import { QuizMission } from '../../../core/models/QuizMission.js'
+import { QuizCategory, ensureDefaultQuizCategories } from '../../../core/models/QuizCategory.js'
 import { BOT_ROSTER, QuizGameEngineService } from '../../student/services/quizGameEngine.service.js'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -89,6 +90,7 @@ export class AdminQuizController {
         botDistribution,
         botAccuracy,
         hintPrices,
+        bots,
       } = req.body
 
       if (roundsPerMatch !== undefined) config.roundsPerMatch = roundsPerMatch
@@ -104,6 +106,17 @@ export class AdminQuizController {
       if (botDistribution) config.botDistribution = botDistribution
       if (botAccuracy) config.botAccuracy = botAccuracy
       if (hintPrices) config.hintPrices = hintPrices
+      if (Array.isArray(bots)) {
+        config.bots = bots
+          .filter((b: any) => b && typeof b.name === 'string' && b.name.trim())
+          .map((b: any, idx: number) => ({
+            id: typeof b.id === 'string' && b.id.trim() ? b.id.trim() : `bot_${Date.now()}_${idx}`,
+            name: b.name.trim(),
+            avatar: typeof b.avatar === 'string' && b.avatar.trim() ? b.avatar.trim() : 'avatar_opp1',
+            difficulty: ['easy', 'medium', 'hard'].includes(b.difficulty) ? b.difficulty : 'medium',
+            isActive: b.isActive !== false,
+          }))
+      }
 
       await config.save()
       res.json({ success: true, data: config, message: 'تنظیمات با موفقیت ذخیره شد' })
@@ -121,7 +134,7 @@ export class AdminQuizController {
       res.json({
         success: true,
         data: {
-          roster: BOT_ROSTER,
+          roster: config.bots || BOT_ROSTER,
           distribution: config.botDistribution,
           accuracy: config.botAccuracy,
           responseDelay: config.botResponseDelay,
@@ -212,6 +225,158 @@ export class AdminQuizController {
   }
 
   /**
+   * دریافت لیست موضوعات کوییز به همراه تعداد سوالات هر موضوع
+   */
+  static async getCategories(req: AuthRequest, res: Response) {
+    try {
+      await ensureDefaultQuizCategories()
+      const categories = await QuizCategory.find().sort({ order: 1, createdAt: 1 }).lean()
+
+      // شمارش سوالات فعال هر موضوع از کالکشن Question
+      const counts = await Question.aggregate([
+        { $match: { isActive: true } },
+        { $unwind: '$tags' },
+        { $group: { _id: '$tags', count: { $sum: 1 } } },
+      ])
+      const countMap = new Map<string, number>(counts.map((c: any) => [c._id, c.count]))
+
+      const data = categories.map((cat: any) => ({
+        ...cat,
+        questionsCount: countMap.get(cat.name) || 0,
+      }))
+
+      res.json({ success: true, data })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * ایجاد موضوع جدید کوییز با آیکون و رنگ دلخواه
+   */
+  static async createCategory(req: AuthRequest, res: Response) {
+    try {
+      const { name, icon, color, isActive } = req.body
+      const trimmed = typeof name === 'string' ? name.trim() : ''
+      if (!trimmed) {
+        return res.status(400).json({ success: false, message: 'نام موضوع الزامی است' })
+      }
+
+      const exists = await QuizCategory.findOne({ name: trimmed })
+      if (exists) {
+        return res.status(409).json({ success: false, message: 'موضوعی با این نام قبلاً ثبت شده است' })
+      }
+
+      const maxOrderDoc = await QuizCategory.findOne().sort({ order: -1 }).select('order').lean()
+      const created = await QuizCategory.create({
+        name: trimmed,
+        icon: (icon || '💡').trim(),
+        color: (color || '#3B82F6').trim(),
+        isActive: isActive !== false,
+        order: (maxOrderDoc?.order || 0) + 1,
+      })
+
+      res.status(201).json({ success: true, data: created, message: 'موضوع جدید با موفقیت ایجاد شد' })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * ویرایش موضوع کوییز (نام، آیکون، رنگ، وضعیت فعال)
+   */
+  static async updateCategory(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params
+      const { name, icon, color, isActive, order } = req.body
+
+      const cat = await QuizCategory.findById(id)
+      if (!cat) {
+        return res.status(404).json({ success: false, message: 'موضوع یافت نشد' })
+      }
+
+      const oldName = cat.name
+      if (typeof name === 'string' && name.trim()) cat.name = name.trim()
+      if (typeof icon === 'string' && icon.trim()) cat.icon = icon.trim()
+      if (typeof color === 'string' && color.trim()) cat.color = color.trim()
+      if (typeof isActive === 'boolean') cat.isActive = isActive
+      if (typeof order === 'number') cat.order = order
+
+      await cat.save()
+
+      // اگر نام موضوع تغییر کرد، تگ سوالات مرتبط نیز همگام‌سازی شود
+      if (oldName !== cat.name) {
+        await Question.updateMany({ tags: oldName }, { $set: { 'tags.$': cat.name } })
+      }
+
+      res.json({ success: true, data: cat, message: 'موضوع با موفقیت ویرایش شد' })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * حذف موضوع کوییز
+   */
+  static async deleteCategory(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params
+      const deleted = await QuizCategory.findByIdAndDelete(id)
+      if (!deleted) {
+        return res.status(404).json({ success: false, message: 'موضوع یافت نشد' })
+      }
+      res.json({ success: true, message: 'موضوع با موفقیت حذف شد' })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * دریافت لیست سوالات کوییز (با قابلیت فیلتر بر اساس موضوع)
+   */
+  static async getQuizQuestions(req: AuthRequest, res: Response) {
+    try {
+      const category = typeof req.query.category === 'string' ? req.query.category.trim() : ''
+      const limit = Math.min(100, parseInt(req.query.limit as string) || 50)
+
+      const filter: any = { isActive: true }
+      if (category) {
+        filter.tags = category
+      } else {
+        const cats = await QuizCategory.find().select('name').lean()
+        const catNames = cats.map((c: any) => c.name)
+        filter.tags = { $in: [...catNames, 'کوییز'] }
+      }
+
+      const questions = await Question.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .select('question options answer difficulty tags mainQuestion createdAt')
+        .lean()
+
+      res.json({ success: true, data: questions })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
+   * حذف سوال کوییز
+   */
+  static async deleteQuizQuestion(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params
+      const deleted = await Question.findByIdAndDelete(id)
+      if (!deleted) {
+        return res.status(404).json({ success: false, message: 'سوال یافت نشد' })
+      }
+      res.json({ success: true, message: 'سوال با موفقیت حذف شد' })
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message })
+    }
+  }
+
+  /**
    * ایجاد سوال کوییز
    */
   static async createQuizQuestion(req: AuthRequest, res: Response) {
@@ -223,6 +388,14 @@ export class AdminQuizController {
         return res.status(400).json({ success: false, message: 'صورت سوال، ۴ گزینه و پاسخ صحیح الزامی هستند' })
       }
 
+      const catName = (category || 'اطلاعات عمومی').trim()
+      // اطمینان از ثبت موضوع در کالکشن موضوعات کوییز
+      await QuizCategory.updateOne(
+        { name: catName },
+        { $setOnInsert: { name: catName, icon: '💡', color: '#3B82F6', isActive: true } },
+        { upsert: true }
+      )
+
       const created = await Question.create({
         question,
         options,
@@ -233,7 +406,7 @@ export class AdminQuizController {
         createdBy: adminId,
         isActive: true,
         status: 'تایید-شده',
-        tags: [category || 'کوییز'],
+        tags: [catName],
       })
 
       res.json({ success: true, data: created, message: 'سوال با موفقیت ایجاد شد' })

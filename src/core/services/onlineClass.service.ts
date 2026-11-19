@@ -1,10 +1,10 @@
 export const DURATION_RATIOS: Record<number, number> = {
   90: 1.0,
-  75: 0.84,
-  60: 0.7,
-  45: 0.56,
-  30: 0.4,
-  15: 0.2,
+  75: 0.88,
+  60: 0.74,
+  45: 0.58,
+  30: 0.42,
+  15: 0.24,
 }
 
 export const EXTRA_CAPACITY_PRICE_PER_STUDENT = 80000 // 80,000 Tomans per added student for student private class
@@ -17,6 +17,7 @@ export const TEACHER_SERVICE_FEE_PERCENT = 0.1 // 10% platform fee
 export interface DurationPriceInfo {
   minutes: number
   price: number
+  perMinutePrice: number
   label: string
   enabled: boolean
 }
@@ -50,9 +51,11 @@ export class OnlineClassService {
         }
       }
 
+      const price = this.calculatePrice(basePrice90Min, minutes)
       return {
         minutes,
-        price: this.calculatePrice(basePrice90Min, minutes),
+        price,
+        perMinutePrice: Math.round(price / minutes),
         label: `${minutes} دقیقه`,
         enabled: isEnabled,
       }

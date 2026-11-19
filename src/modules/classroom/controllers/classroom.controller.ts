@@ -3,6 +3,8 @@ import { ClassroomService } from '../services/classroom.service.js'
 import { AuthAdapter } from '../adapters/AuthAdapter.js'
 import { LiveKitRtcProvider } from '../adapters/RtcProvider.js'
 import { ClassroomPricing } from '../../../core/models/ClassroomPricing.js'
+import { ClassroomSession } from '../models/ClassroomSession.js'
+import { RoomManager } from '../native/services/RoomManager.js'
 import { logger } from '../../../core/utils/logger.js'
 
 const classroomService = new ClassroomService()
@@ -170,12 +172,42 @@ export class ClassroomController {
         return
       }
 
+      await RoomManager.cleanupExpiredRecordings()
       const { status } = req.query
       const sessions = await classroomService.listSessions({ status: status as string })
 
+      // Merge live in-memory recording status if room is currently active
+      const enriched = sessions.map((s: any) => {
+        const plain = typeof s.toObject === 'function' ? s.toObject() : { ...s }
+        const liveRoom = RoomManager.getRoom(plain.roomName) || RoomManager.getCompletedRoom(plain.roomName)
+        if (liveRoom && liveRoom.recording) {
+          plain.recording = {
+            ...(plain.recording || {}),
+            status: liveRoom.recording.status !== 'idle' ? liveRoom.recording.status : plain.recording?.status || 'idle',
+            isRecording: liveRoom.recording.isRecording,
+            mode: liveRoom.recording.mode,
+            videoUrl: liveRoom.recording.videoUrl || plain.recording?.videoUrl,
+            fileSize: liveRoom.recording.fileSize || plain.recording?.fileSize || 0,
+            chunksCount: liveRoom.recording.chunksCount || plain.recording?.chunksCount || 0,
+            startedAt: liveRoom.recording.startedAt ? new Date(liveRoom.recording.startedAt) : plain.recording?.startedAt,
+            endedAt: liveRoom.recording.endedAt ? new Date(liveRoom.recording.endedAt) : plain.recording?.endedAt,
+            expiresAt: liveRoom.recording.expiresAt ? new Date(liveRoom.recording.expiresAt) : plain.recording?.expiresAt,
+            serverLogsCount: liveRoom.recording.serverLogs?.length || plain.recording?.serverLogs?.length || 0,
+            chatLogsCount: liveRoom.chatMessages?.length || plain.recording?.chatLog?.length || 0,
+          }
+        } else if (plain.recording) {
+          plain.recording = {
+            ...plain.recording,
+            serverLogsCount: plain.recording.serverLogs?.length || 0,
+            chatLogsCount: plain.recording.chatLog?.length || 0,
+          }
+        }
+        return plain
+      })
+
       res.status(200).json({
         success: true,
-        data: sessions,
+        data: enriched,
       })
     } catch (error: any) {
       logger.error('[ClassroomController] listSessions error:', error)
@@ -377,7 +409,12 @@ export class ClassroomController {
             d90: 50000,
           },
           extraStudentPrice: 50000,
+          recordingRetentionHours: 48,
+          autoRecordEnabled: true,
         })
+      }
+      if (typeof pricing.recordingRetentionHours === 'number') {
+        RoomManager.setRetentionHoursCache(pricing.recordingRetentionHours)
       }
       res.status(200).json({ success: true, data: pricing })
     } catch (error: any) {
@@ -392,7 +429,14 @@ export class ClassroomController {
    */
   static async updatePricing(req: Request, res: Response): Promise<void> {
     try {
-      const { isFree, only90Min, durationPrices, extraStudentPrice } = req.body
+      const {
+        isFree,
+        only90Min,
+        durationPrices,
+        extraStudentPrice,
+        recordingRetentionHours,
+        autoRecordEnabled,
+      } = req.body
       let pricing = await ClassroomPricing.findOne({ key: 'default' })
       if (!pricing) {
         pricing = new ClassroomPricing({ key: 'default' })
@@ -400,6 +444,7 @@ export class ClassroomController {
 
       if (typeof isFree === 'boolean') pricing.isFree = isFree
       if (typeof only90Min === 'boolean') pricing.only90Min = only90Min
+      if (typeof autoRecordEnabled === 'boolean') pricing.autoRecordEnabled = autoRecordEnabled
 
       if (durationPrices && typeof durationPrices === 'object') {
         pricing.durationPrices = {
@@ -414,6 +459,26 @@ export class ClassroomController {
 
       if (extraStudentPrice !== undefined) {
         pricing.extraStudentPrice = Math.max(0, Number(extraStudentPrice) || 0)
+      }
+
+      if (recordingRetentionHours !== undefined) {
+        const hours = Math.max(0, Number(recordingRetentionHours) || 0)
+        pricing.recordingRetentionHours = hours
+        RoomManager.setRetentionHoursCache(hours)
+
+        // Update expiration timestamp on existing completed recordings
+        const completedSessions = await ClassroomSession.find({
+          'recording.status': 'completed',
+        })
+        for (const sess of completedSessions) {
+          if (sess.recording) {
+            const baseEnd = sess.recording.endedAt || sess.endedAt || sess.updatedAt || new Date()
+            sess.recording.expiresAt =
+              hours > 0 ? new Date(new Date(baseEnd).getTime() + hours * 3600 * 1000) : undefined
+            await sess.save()
+          }
+        }
+        await RoomManager.cleanupExpiredRecordings()
       }
 
       await pricing.save()

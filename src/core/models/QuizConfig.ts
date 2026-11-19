@@ -1,5 +1,19 @@
 import mongoose, { Document, Schema } from 'mongoose'
 
+export interface IQuizBotProfile {
+  id: string
+  name: string
+  avatar: string
+  difficulty: 'easy' | 'medium' | 'hard'
+  isActive: boolean
+}
+
+export const DEFAULT_QUIZ_BOTS: IQuizBotProfile[] = [
+  { id: 'bot_weak_default', name: 'ربات ضعیف', avatar: 'avatar_opp1', difficulty: 'easy', isActive: true },
+  { id: 'bot_medium_default', name: 'ربات متوسط', avatar: 'avatar_opp2', difficulty: 'medium', isActive: true },
+  { id: 'bot_strong_default', name: 'ربات قوی', avatar: 'avatar_opp3', difficulty: 'hard', isActive: true },
+]
+
 export interface IQuizConfig extends Document {
   key: string
   roundsPerMatch: number
@@ -15,6 +29,7 @@ export interface IQuizConfig extends Document {
   lossXpReward: number
   matchmakingTimeoutSeconds: number
   botEnabled: boolean
+  bots: IQuizBotProfile[]
   botDistribution: {
     easy: number
     medium: number
@@ -55,6 +70,18 @@ const quizConfigSchema = new Schema<IQuizConfig>(
     lossXpReward: { type: Number, default: 20 },
     matchmakingTimeoutSeconds: { type: Number, default: 10 },
     botEnabled: { type: Boolean, default: true },
+    bots: {
+      type: [
+        {
+          id: { type: String, required: true },
+          name: { type: String, required: true, trim: true },
+          avatar: { type: String, default: 'avatar_opp1' },
+          difficulty: { type: String, enum: ['easy', 'medium', 'hard'], default: 'medium' },
+          isActive: { type: Boolean, default: true },
+        },
+      ],
+      default: () => DEFAULT_QUIZ_BOTS,
+    },
     botDistribution: {
       easy: { type: Number, default: 70 },
       medium: { type: Number, default: 25 },

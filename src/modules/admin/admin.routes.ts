@@ -22,6 +22,7 @@ import walletRoutes from './routes/admin.wallet.routes.js'
 import blogRoutes from './routes/admin.blog.routes.js'
 import landingToolsRoutes from './routes/admin.landingTools.routes.js'
 import nokitaRoutes from './routes/admin.nokita.routes.js'
+import eduContentRoutes from './routes/admin.eduContent.routes.js'
 
 const adminRouter = Router()
 
@@ -47,5 +48,6 @@ adminRouter.use('/kitayar', kitayarRoutes)
 adminRouter.use('/blog', blogRoutes)
 adminRouter.use('/landing-tools', landingToolsRoutes)
 adminRouter.use('/nokita', nokitaRoutes)
+adminRouter.use('/edu-content', eduContentRoutes)
 
 export default adminRouter

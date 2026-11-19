@@ -1,5 +1,6 @@
 // src/core/models/TeacherProfile.ts
 import mongoose, { Document, Schema, Types } from 'mongoose'
+import type { IWeeklyScheduleMap } from '../utils/weeklySchedule.js'
 
 export interface IExperience {
   id: string
@@ -74,6 +75,7 @@ export interface ITeacherProfile extends Document {
   teachingGrades?: string[]
   educationLevel?: 'elementary' | 'secondary' | 'both'
   availableSchedule?: { date: string; slots: string[] }[]
+  weeklySchedule?: IWeeklyScheduleMap
 }
 
 const experienceSchema = new Schema(
@@ -132,6 +134,27 @@ const resumeSchema = new Schema(
     skills: { type: [String], default: [] },
     certificates: { type: [certificateSchema], default: [] },
     honors: { type: [honorSchema], default: [] },
+  },
+  { _id: false }
+)
+
+const weeklyTimeRangeSchema = new Schema(
+  {
+    startTime: { type: String, required: true },
+    endTime: { type: String, required: true },
+  },
+  { _id: false }
+)
+
+const weeklyScheduleSchema = new Schema(
+  {
+    saturday: { type: [weeklyTimeRangeSchema], default: [] },
+    sunday: { type: [weeklyTimeRangeSchema], default: [] },
+    monday: { type: [weeklyTimeRangeSchema], default: [] },
+    tuesday: { type: [weeklyTimeRangeSchema], default: [] },
+    wednesday: { type: [weeklyTimeRangeSchema], default: [] },
+    thursday: { type: [weeklyTimeRangeSchema], default: [] },
+    friday: { type: [weeklyTimeRangeSchema], default: [] },
   },
   { _id: false }
 )
@@ -271,6 +294,18 @@ const teacherProfileSchema = new Schema<ITeacherProfile>(
         slots: { type: [String], default: [] },
       },
     ],
+    weeklySchedule: {
+      type: weeklyScheduleSchema,
+      default: () => ({
+        saturday: [],
+        sunday: [],
+        monday: [],
+        tuesday: [],
+        wednesday: [],
+        thursday: [],
+        friday: [],
+      }),
+    },
   },
   { timestamps: true }
 )

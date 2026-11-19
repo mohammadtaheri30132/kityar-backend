@@ -21,7 +21,15 @@ router.get('/bots', AdminQuizController.getBots)
 router.get('/players', AdminQuizController.getPlayers)
 router.post('/players/:userId/adjust-coins', AdminQuizController.adjustCoins)
 
-// ایجاد سریع سوال کوییز
+// مدیریت موضوعات و آیکون‌های کوییز
+router.get('/categories', AdminQuizController.getCategories)
+router.post('/categories', AdminQuizController.createCategory)
+router.put('/categories/:id', AdminQuizController.updateCategory)
+router.delete('/categories/:id', AdminQuizController.deleteCategory)
+
+// مدیریت سوالات کوییز
+router.get('/questions', AdminQuizController.getQuizQuestions)
 router.post('/questions', AdminQuizController.createQuizQuestion)
+router.delete('/questions/:id', AdminQuizController.deleteQuizQuestion)
 
 export default router

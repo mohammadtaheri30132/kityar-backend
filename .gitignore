@@ -6,3 +6,5 @@ logs/
 .DS_Store
 public/uploads/*
 !public/uploads/.gitkeep
+graphify-out/
+.agents/

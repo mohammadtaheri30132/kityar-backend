@@ -125,10 +125,28 @@ export class ClassroomService {
     const isTeacher = user.userId === teacherId || user.role === 'teacher'
     const isAdmin = user.role === 'admin'
 
-    if (source && !source.canAccess(user.userId, user.role)) {
-      const error: any = new Error('شما مجاز به ورود به این کلاس نیستید')
-      error.statusCode = 403
-      throw error
+    if (source) {
+      if (!source.isJoinableStatus()) {
+        const error: any = new Error(
+          source.status === 'completed' || source.status === 'cancelled' || source.status === 'rejected' || source.status === 'refunded'
+            ? 'این کلاس به پایان رسیده یا لغو شده است و امکان ورود مجدد به اتاق زنده وجود ندارد.'
+            : 'این کلاس هنوز توسط معلم تایید نهایی نشده است.'
+        )
+        error.statusCode = 403
+        throw error
+      }
+      const allowed = await source.canAccess(user.userId, user.role)
+      if (!allowed) {
+        const error: any = new Error('شما عضو تاییدشده این کلاس نیستید و مجاز به ورود به کلاس نیستید.')
+        error.statusCode = 403
+        throw error
+      }
+    } else if (session) {
+      if (['completed', 'expired', 'cancelled'].includes(session.status)) {
+        const error: any = new Error('این جلسه کلاس به پایان رسیده یا لغو شده است.')
+        error.statusCode = 410
+        throw error
+      }
     }
 
     // 4. Ensure ClassroomSession entity exists in DB

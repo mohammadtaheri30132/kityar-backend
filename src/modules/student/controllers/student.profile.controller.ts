@@ -92,6 +92,12 @@ export const getStudentProfile = async (req: Request, res: Response): Promise<vo
         invitedCount: invitedStudentsCount,
         hasInvitedBy: !!studentProfile.invitedByStudent,
         weeklySchedule: studentProfile.weeklySchedule || [],
+        eduLevelId: studentProfile.eduLevelId || null,
+        eduGradeId: studentProfile.eduGradeId || null,
+        eduFieldId: studentProfile.eduFieldId || null,
+        selectedBookIds: studentProfile.selectedBookIds || [],
+        studyProgressCount: (studentProfile.studyProgress || []).length,
+        completedCount: (studentProfile.studyProgress || []).filter((p) => p.status === 'completed').length,
       },
     });
   } catch (error: any) {
@@ -108,7 +114,7 @@ export const updateStudentProfile = async (req: Request, res: Response): Promise
     const user = (req as any).user;
     const studentPhone = user?.phoneNumber || user?.username;
 
-    const { firstName, lastName, fatherName, parentPhone, birthDate } = req.body;
+    const { firstName, lastName, fatherName, parentPhone, birthDate, eduLevelId, eduGradeId, eduFieldId, selectedBookIds } = req.body;
 
     const dbUser = await User.findById(user._id);
     if (!dbUser) {
@@ -134,6 +140,11 @@ export const updateStudentProfile = async (req: Request, res: Response): Promise
     if (parentPhone !== undefined) (studentProfile as any).parentPhone = String(parentPhone).trim();
     if (birthDate !== undefined) (studentProfile as any).birthDate = String(birthDate).trim();
     if (fatherName !== undefined) (studentProfile as any).fatherName = String(fatherName).trim();
+    if (eduLevelId !== undefined) studentProfile.eduLevelId = eduLevelId || undefined;
+    if (eduGradeId !== undefined) studentProfile.eduGradeId = eduGradeId || undefined;
+    if (eduFieldId !== undefined) studentProfile.eduFieldId = eduFieldId || null;
+    if (Array.isArray(selectedBookIds)) studentProfile.selectedBookIds = selectedBookIds;
+    // Note: studyProgress is preserved intentionally across grade/field/book switches.
     await studentProfile.save();
 
     // همگام‌سازی فیلدهای تغییر یافته در رکوردهای عضویت کلاسی (برای نمایش صحیح در لیست معلم)
@@ -163,6 +174,10 @@ export const updateStudentProfile = async (req: Request, res: Response): Promise
         fatherName: dbUser.fatherName,
         parentPhone: (studentProfile as any).parentPhone,
         birthDate: (studentProfile as any).birthDate,
+        eduLevelId: studentProfile.eduLevelId || null,
+        eduGradeId: studentProfile.eduGradeId || null,
+        eduFieldId: studentProfile.eduFieldId || null,
+        selectedBookIds: studentProfile.selectedBookIds || [],
       },
     });
   } catch (error: any) {

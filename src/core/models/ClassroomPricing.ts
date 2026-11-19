@@ -15,6 +15,8 @@ export interface IClassroomPricing extends Document {
   only90Min: boolean
   durationPrices: IDurationPrices
   extraStudentPrice: number
+  recordingRetentionHours: number
+  autoRecordEnabled: boolean
   createdAt: Date
   updatedAt: Date
 }
@@ -33,6 +35,8 @@ const classroomPricingSchema = new Schema<IClassroomPricing>(
       d90: { type: Number, default: 50000 },
     },
     extraStudentPrice: { type: Number, default: 50000 },
+    recordingRetentionHours: { type: Number, default: 48 },
+    autoRecordEnabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 )

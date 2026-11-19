@@ -25,6 +25,7 @@ import publicRankEstimateRoutes from './modules/public/routes/public.rankEstimat
 import publicMusicRoutes from './modules/public/routes/public.music.routes.js';
 import publicPhonebookRoutes from './modules/public/routes/public.phonebook.routes.js';
 import publicNokitaRoutes from './modules/public/routes/public.nokita.routes.js';
+import publicEduContentRoutes from './modules/public/routes/public.eduContent.routes.js';
 import chatRoutes from './modules/chat/chat.routes.js';
 import classroomRoutes from './modules/classroom/classroom.routes.js';
 import authRoutes from './modules/auth/auth.routes.js';
@@ -106,6 +107,7 @@ app.use('/api/public/rank-estimate', publicRankEstimateRoutes);
 app.use('/api/public/music', publicMusicRoutes);
 app.use('/api/public/phonebook', publicPhonebookRoutes);
 app.use('/api/public/nokita', publicNokitaRoutes);
+app.use('/api/public/edu-content', publicEduContentRoutes);
 app.use('/api/admin', adminRoutes)
 app.use('/api/teacher', teacherRoutes)
 app.use('/api/student', studentRoutes)

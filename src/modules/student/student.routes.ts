@@ -4,9 +4,11 @@ import authRoutes from './routes/student.auth.routes.js'
 import classroomRoutes from './routes/student.classroom.routes.js'
 import profileRoutes from './routes/student.profile.routes.js'
 import quizRoutes from './routes/student.quiz.routes.js'
+import flashcardRoutes from './routes/student.flashcard.routes.js'
 import homeworkRoutes from './routes/student.homework.routes.js'
 import notificationRoutes from './routes/student.notification.routes.js'
 import studentMarketplaceRoutes from './routes/student.marketplace.routes.js'
+import studentEduContentRoutes from './routes/student.eduContent.routes.js'
 
 const studentRouter = Router()
 
@@ -18,8 +20,10 @@ studentRouter.use('/exams', examRoutes)
 studentRouter.use('/classrooms', classroomRoutes)
 studentRouter.use('/profile', profileRoutes)
 studentRouter.use('/quiz', quizRoutes)
+studentRouter.use('/flashcards', flashcardRoutes)
 studentRouter.use('/homeworks', homeworkRoutes)
 studentRouter.use('/notifications', notificationRoutes)
+studentRouter.use('/edu-content', studentEduContentRoutes)
 
 // روت‌های بازارچه، رفع اشکال و کلاس آنلاین
 studentRouter.use('/', studentMarketplaceRoutes)
