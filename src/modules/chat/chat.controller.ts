@@ -1,9 +1,12 @@
 import { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import { ClassMessage, MessageType, RecipientScope } from '../../core/models/ClassMessage.js';
 import { Classroom } from '../../core/models/Classroom.js';
 import { ClassMembership } from '../../core/models/ClassMembership.js';
 import { Conversation } from '../../core/models/Conversation.js';
 import { Message } from '../../core/models/Message.js';
+import { OnlineClassBooking } from '../../core/models/OnlineClassBooking.js';
+import { OnlineClassService } from '../../core/services/onlineClass.service.js';
 import { NotificationService } from '../../core/services/notificationService.js';
 import { logger } from '../../core/utils/logger.js';
 
@@ -284,15 +287,37 @@ export class ChatController {
   static async getConversationMessages(req: Request, res: Response) {
     try {
       const { conversationId } = req.params;
-      const userId = (req as any).user?._id;
+      const user = (req as any).user;
+      const userId = user?._id?.toString();
 
-      const conversation = await Conversation.findOne({
-        _id: conversationId,
-        participants: userId,
-      });
-
+      const conversation = await Conversation.findById(conversationId);
       if (!conversation) {
         return res.status(404).json({ success: false, message: 'گفتگو یافت نشد' });
+      }
+
+      const isParticipant =
+        user?.role === 'admin' ||
+        conversation.participants.some((p: any) => p.toString() === userId);
+
+      if (!isParticipant) {
+        if (conversation.type === 'online_class' && conversation.onlineClassBookingId) {
+          const booking = await OnlineClassBooking.findById(conversation.onlineClassBookingId);
+          if (booking) {
+            const tId = (booking.teacherId as any)?._id?.toString() || booking.teacherId?.toString();
+            const sId = (booking.studentId as any)?._id?.toString() || booking.studentId?.toString();
+            const invs = (booking.invitedStudents || []).map((s: any) => s.studentId?.toString());
+            if (tId === userId || sId === userId || invs.includes(userId)) {
+              conversation.participants.push((req as any).user?._id);
+              await conversation.save();
+            } else {
+              return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز به این گفتگو' });
+            }
+          } else {
+            return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز به این گفتگو' });
+          }
+        } else {
+          return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز به این گفتگو' });
+        }
       }
 
       const messages = await Message.find({ conversationId })
@@ -307,21 +332,186 @@ export class ChatController {
   }
 
   /**
+   * دریافت یا ایجاد گفتگوی اختصاصی میان معلم و دانش‌آموز برای کلاس تایید شده
+   * چت تا ۲۴ ساعت پس از پایان کلاس فعال است و سپس قفل می‌شود
+   */
+  static async getOnlineClassConversation(req: Request, res: Response) {
+    try {
+      const { bookingId } = req.params;
+      const user = (req as any).user;
+      const currentUserId = user?._id?.toString();
+
+      const booking = await OnlineClassBooking.findById(bookingId)
+        .populate('teacherId', 'fullName avatar phoneNumber role')
+        .populate('studentId', 'fullName avatar phoneNumber role');
+
+      if (!booking) {
+        return res.status(404).json({ success: false, message: 'کلاس آنلاین یافت نشد' });
+      }
+
+      // Check access permission
+      const teacherUserId = (booking.teacherId as any)?._id?.toString() || booking.teacherId?.toString();
+      const studentUserId = (booking.studentId as any)?._id?.toString() || booking.studentId?.toString();
+      const invitedIds = (booking.invitedStudents || []).map((s: any) => s.studentId?.toString());
+
+      const hasAccess =
+        user?.role === 'admin' ||
+        currentUserId === teacherUserId ||
+        currentUserId === studentUserId ||
+        invitedIds.includes(currentUserId);
+
+      if (!hasAccess) {
+        return res.status(403).json({ success: false, message: 'شما مجاز به دسترسی به این چت نیستید' });
+      }
+
+      // Check if class is valid for chatting
+      const allowedStatuses = ['paid_pending_teacher', 'confirmed', 'in_progress', 'completed'];
+      if (!allowedStatuses.includes(booking.status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'امکان گفتگو در این کلاس به دلیل لغو یا رد درخواست وجود ندارد.',
+        });
+      }
+
+      // Check 24-hour expiration rule after class ends
+      const policy = await OnlineClassService.getSessionPolicy();
+      const hoursAfterEnd = policy.chatOpenHoursAfterEnd ?? 24;
+      const baseEnd =
+        booking.endsAt ||
+        booking.endTime ||
+        new Date(new Date(booking.scheduledAt).getTime() + (booking.durationMinutes || 90) * 60000);
+      const chatCloseAt = new Date(new Date(baseEnd).getTime() + hoursAfterEnd * 3600 * 1000);
+      const isLocked = Date.now() > chatCloseAt.getTime();
+
+      let conversation = await Conversation.findOne({
+        type: 'online_class',
+        onlineClassBookingId: booking._id,
+      });
+
+      const participantIds = Array.from(new Set([teacherUserId, studentUserId, ...invitedIds].filter(Boolean)));
+
+      if (!conversation) {
+        conversation = await Conversation.create({
+          type: 'online_class',
+          onlineClassBookingId: booking._id,
+          participants: participantIds,
+          isActive: !isLocked,
+        });
+      } else {
+        let updated = false;
+        participantIds.forEach((pid) => {
+          if (!conversation!.participants.some((p: any) => p.toString() === pid)) {
+            conversation!.participants.push(new Types.ObjectId(pid));
+            updated = true;
+          }
+        });
+        if (isLocked && conversation.isActive) {
+          conversation.isActive = false;
+          updated = true;
+        }
+        if (updated) {
+          await conversation.save();
+        }
+      }
+
+      const isCurrentStudent = currentUserId === studentUserId;
+      const partnerUser = isCurrentStudent ? (booking.teacherId as any) : (booking.studentId as any);
+
+      return res.json({
+        success: true,
+        data: {
+          conversationId: conversation._id,
+          conversation: conversation,
+          isLocked,
+          chatCloseAt,
+          partnerName:
+            partnerUser?.fullName || (isCurrentStudent ? 'دبیر محترم کلاس' : 'دانش‌آموز'),
+          partnerAvatar: partnerUser?.avatar || '',
+          partnerRole: isCurrentStudent ? 'teacher' : 'student',
+          booking: {
+            id: booking._id,
+            bookingCode: booking.bookingCode,
+            topic: booking.topic,
+            subjectName: booking.subjectName,
+            status: booking.status,
+            scheduledAt: booking.scheduledAt,
+            effectiveStartAt: booking.effectiveStartAt,
+            endsAt: booking.endsAt,
+          },
+        },
+      });
+    } catch (error: any) {
+      logger.error('Error in getOnlineClassConversation:', error);
+      return res.status(500).json({ success: false, message: 'خطا در بارگذاری گفتگوی کلاس' });
+    }
+  }
+
+  /**
    * ارسال پیام در گفتگوی اختصاصی
    */
   static async sendConversationMessage(req: Request, res: Response) {
     try {
       const { conversationId } = req.params;
-      const userId = (req as any).user?._id;
+      const user = (req as any).user;
+      const userId = user?._id?.toString();
       const { content, type, mediaUrl, mediaDuration, fileSize, fileName } = req.body;
 
-      const conversation = await Conversation.findOne({
-        _id: conversationId,
-        participants: userId,
-      });
+      const conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        return res.status(404).json({ success: false, message: 'گفتگو یافت نشد' });
+      }
+
+      const isParticipant =
+        user?.role === 'admin' ||
+        conversation.participants.some((p: any) => p.toString() === userId);
+
+      if (!isParticipant) {
+        if (conversation.type === 'online_class' && conversation.onlineClassBookingId) {
+          const booking = await OnlineClassBooking.findById(conversation.onlineClassBookingId);
+          if (booking) {
+            const tId = (booking.teacherId as any)?._id?.toString() || booking.teacherId?.toString();
+            const sId = (booking.studentId as any)?._id?.toString() || booking.studentId?.toString();
+            const invs = (booking.invitedStudents || []).map((s: any) => s.studentId?.toString());
+            if (tId === userId || sId === userId || invs.includes(userId)) {
+              conversation.participants.push(user._id);
+              await conversation.save();
+            } else {
+              return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز برای ارسال پیام' });
+            }
+          } else {
+            return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز برای ارسال پیام' });
+          }
+        } else {
+          return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز برای ارسال پیام' });
+        }
+      }
 
       if (!conversation) {
         return res.status(404).json({ success: false, message: 'گفتگو یافت نشد' });
+      }
+
+      // Check if conversation is tied to an online class and enforce 24-hour expiration
+      if (conversation.type === 'online_class' && conversation.onlineClassBookingId) {
+        const booking = await OnlineClassBooking.findById(conversation.onlineClassBookingId);
+        if (booking) {
+          const policy = await OnlineClassService.getSessionPolicy();
+          const hoursAfterEnd = policy.chatOpenHoursAfterEnd ?? 24;
+          const baseEnd =
+            booking.endsAt ||
+            booking.endTime ||
+            new Date(new Date(booking.scheduledAt).getTime() + (booking.durationMinutes || 90) * 60000);
+          const chatCloseAt = new Date(new Date(baseEnd).getTime() + hoursAfterEnd * 3600 * 1000);
+
+          if (Date.now() > chatCloseAt.getTime()) {
+            conversation.isActive = false;
+            await conversation.save();
+            return res.status(403).json({
+              success: false,
+              message:
+                'مهلت گفتگوی این کلاس (۲۴ ساعت پس از پایان کلاس) به اتمام رسیده است و امکان ارسال پیام جدید وجود ندارد.',
+            });
+          }
+        }
       }
 
       const message = await Message.create({
