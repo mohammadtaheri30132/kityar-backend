@@ -97,6 +97,44 @@ export class TeacherNotificationController {
   }
 
   /**
+   * علامت‌گذاری دسته‌ای یا همه اعلان‌ها به عنوان خوانده شده
+   */
+  static async markReadBatch(req: Request, res: Response) {
+    try {
+      const { notificationIds } = req.body;
+      const teacherPhone = (req as any).user?.phoneNumber;
+      const teacherId = (req as any).user?._id;
+
+      if (Array.isArray(notificationIds) && notificationIds.length > 0) {
+        await Notification.updateMany(
+          { _id: { $in: notificationIds } },
+          { isRead: true, readAt: new Date() }
+        );
+      } else {
+        await Notification.updateMany(
+          {
+            $or: [
+              { recipientType: 'teacher', recipientPhone: teacherPhone },
+              { recipientType: 'teacher', recipientUserId: teacherId },
+              { recipientType: 'all' },
+            ],
+            isRead: false,
+          },
+          { isRead: true, readAt: new Date() }
+        );
+      }
+
+      return res.json({
+        success: true,
+        message: 'اعلان‌ها با موفقیت علامت‌گذاری شدند',
+      });
+    } catch (error: any) {
+      logger.error('Error in markReadBatch:', error);
+      return res.status(500).json({ success: false, message: 'خطا در ثبت وضعیت اعلان‌ها' });
+    }
+  }
+
+  /**
    * خوانده شده کردن تمامی اعلان‌ها
    */
   static async markAllAsRead(req: Request, res: Response) {

@@ -8,6 +8,7 @@ router.use(protect);
 
 router.get('/', TeacherNotificationController.getNotifications);
 router.get('/unread-count', TeacherNotificationController.getUnreadCount);
+router.post('/mark-read', TeacherNotificationController.markReadBatch);
 router.put('/:id/read', TeacherNotificationController.markAsRead);
 router.put('/read-all', TeacherNotificationController.markAllAsRead);
 router.post('/device-token', TeacherNotificationController.registerDeviceToken);
