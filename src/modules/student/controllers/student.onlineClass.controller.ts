@@ -585,8 +585,21 @@ export class StudentOnlineClassController {
               scheduledAt: startTime.toISOString(),
             },
           }).catch((err) => logger.warn('Failed to send class request notification to teacher:', err))
+
+          // ارسال پیامک الگوی کاوه‌نگار به استاد (requestClassForTeacher)
+          const teacherPhone = (teacherProfile.user as any)?.phoneNumber
+          const teacherName = (teacherProfile.user as any)?.fullName || 'استاد'
+          if (teacherPhone) {
+            SmsService.sendTeacherClassRequest({
+              mobile: teacherPhone,
+              teacherName,
+              courseName: subjectName || topic.trim(),
+              startTime,
+              duration,
+            }).catch((err) => logger.warn('Failed to send class request SMS to teacher:', err))
+          }
         } catch (notifErr) {
-          logger.warn('Error queuing class booking notification:', notifErr)
+          logger.warn('Error queuing class booking notification/SMS:', notifErr)
         }
 
         return {
@@ -1279,14 +1292,18 @@ export class StudentOnlineClassController {
         meeting: meetingInfo,
       })
 
-      // Send SMS notification to each selected teacher
+      // ارسال پیامک الگوی کاوه‌نگار به اساتید منتخب (requestClassForTeacher)
       for (const p of teacherProfiles) {
         const teacherPhone = (p.user as any)?.phoneNumber
+        const teacherName = (p.user as any)?.fullName || 'استاد'
         if (teacherPhone) {
-          SmsService.sendSimpleMessage(
-            teacherPhone,
-            `استاد گرامی، یک درخواست کلاس آنلاین ۱.۵ ساعته برای درس «${subjectName}» در کیتایار ثبت شد. لطفاً به میز کار خود مراجعه کنید.`
-          ).catch(() => {})
+          SmsService.sendTeacherClassRequest({
+            mobile: teacherPhone,
+            teacherName,
+            courseName: subjectName || topic.trim(),
+            startTime,
+            duration: 90,
+          }).catch((err) => logger.warn('Failed to send class request SMS to teacher:', err))
         }
       }
 

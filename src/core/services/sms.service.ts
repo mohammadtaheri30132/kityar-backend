@@ -1,4 +1,6 @@
 import { logger } from '../utils/logger.js';
+// @ts-ignore
+import moment from 'moment-jalaali';
 
 interface OtpStoreItem {
   code: string;
@@ -151,6 +153,146 @@ export class SmsService {
     } catch (err: any) {
       logger.error('Error sending sms notification:', err.message);
       return false;
+    }
+  }
+
+  /**
+   * جایگزینی فاصله‌ها با زیرخط برای توکن‌های استاندارد (بدون فاصله)
+   */
+  public static sanitizeSingleToken(str: string | undefined | null, fallback: string = 'کاربر'): string {
+    if (!str) return fallback;
+    const cleaned = String(str).trim().replace(/\s+/g, '_');
+    return cleaned.slice(0, 100) || fallback;
+  }
+
+  /**
+   * ۱. ارسال پیامک درخواست کلاس جدید به استاد با استفاده از الگوی کاوه‌نگار (requestClassForTeacher)
+   */
+  public static async sendTeacherClassRequest(options: {
+    mobile: string;
+    teacherName: string;
+    courseName: string;
+    startTime: Date | string;
+    duration: number | string;
+  }): Promise<{ success: boolean; message?: string }> {
+    try {
+      const cleanPhone = this.normalizePhone(options.mobile);
+      if (cleanPhone.length !== 11 || !cleanPhone.startsWith('09')) {
+        logger.warn(`⚠️ [کاوه نگار] شماره موبایل استاد نامعتبر است: ${options.mobile}`);
+        return { success: false, message: 'شماره موبایل استاد نامعتبر است' };
+      }
+
+      const apiKey = process.env.KAVENEGAR_API_KEY || this.apiKey;
+      const url = `https://api.kavenegar.com/v1/${apiKey}/verify/lookup.json`;
+
+      // ساعت شروع کلاس درخواستی برای token20 (مجاز به داشتن فاصله)
+      let formattedTime = String(options.startTime || '').trim();
+      if (options.startTime instanceof Date || (typeof options.startTime === 'string' && !isNaN(Date.parse(options.startTime)))) {
+        try {
+          const d = new Date(options.startTime);
+          formattedTime = moment(d).format('jYYYY/jMM/jDD ساعت HH:mm');
+        } catch (_) {}
+      }
+
+      // مدت زمان کلاس برای token10 (مثلا 90 یا 45)
+      const durationStr = String(options.duration || '90').trim();
+
+      const params = new URLSearchParams({
+        receptor: cleanPhone,
+        template: 'requestClassForTeacher',
+        token: this.sanitizeSingleToken(options.teacherName, 'استاد'),
+        token2: this.sanitizeSingleToken(options.courseName, 'درس'),
+        token10: durationStr,
+        token20: formattedTime,
+        type: 'sms',
+      });
+
+      logger.info(`📤 [کاوه نگار] ارسال پیامک درخواست کلاس به استاد (${cleanPhone})...`);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
+        },
+        body: params.toString(),
+      });
+
+      const data: any = await response.json();
+      if (data?.return?.status === 200) {
+        logger.info(`✅ [کاوه نگار] پیامک درخواست کلاس با موفقیت به استاد ${cleanPhone} ارسال شد.`);
+        return { success: true, message: 'پیامک به استاد ارسال شد' };
+      } else {
+        logger.warn(`⚠️ [کاوه نگار] عدم ارسال پیامک به استاد (کد ${data?.return?.status}): ${data?.return?.message}`);
+        return { success: false, message: data?.return?.message };
+      }
+    } catch (err: any) {
+      // عدم ایجاد وقفه یا خطا در فرآیند سیستم در صورت قطع اینترنت، اعتبار ناکافی یا خطای سرویس‌دهنده
+      logger.warn(`⚠️ [کاوه نگار] خطای ارتباطی در ارسال پیامک استاد: ${err.message}`);
+      return { success: false, message: err.message };
+    }
+  }
+
+  /**
+   * ۲. ارسال پیامک تایید کلاس به دانش‌آموز با استفاده از الگوی کاوه‌نگار (Requestaccepted)
+   */
+  public static async sendStudentRequestAccepted(options: {
+    mobile: string;
+    studentName: string;
+    classTime: Date | string;
+  }): Promise<{ success: boolean; message?: string }> {
+    try {
+      const cleanPhone = this.normalizePhone(options.mobile);
+      if (cleanPhone.length !== 11 || !cleanPhone.startsWith('09')) {
+        logger.warn(`⚠️ [کاوه نگار] شماره موبایل دانش‌آموز نامعتبر است: ${options.mobile}`);
+        return { success: false, message: 'شماره موبایل دانش‌آموز نامعتبر است' };
+      }
+
+      const apiKey = process.env.KAVENEGAR_API_KEY || this.apiKey;
+      const url = `https://api.kavenegar.com/v1/${apiKey}/verify/lookup.json`;
+
+      // زمان برگزاری کلاس برای token (طبق مستندات: حتماً بدون فاصله!)
+      let timeToken = 'ساعت_مقرر';
+      if (options.classTime instanceof Date || (typeof options.classTime === 'string' && !isNaN(Date.parse(options.classTime)))) {
+        try {
+          const d = new Date(options.classTime);
+          timeToken = moment(d).format('jYYYY/jMM/jDD_HH:mm');
+        } catch (_) {}
+      } else if (options.classTime) {
+        timeToken = this.sanitizeSingleToken(String(options.classTime), 'ساعت_مقرر');
+      }
+
+      timeToken = this.sanitizeSingleToken(timeToken, 'ساعت_مقرر');
+
+      const params = new URLSearchParams({
+        receptor: cleanPhone,
+        template: 'Requestaccepted',
+        token: timeToken, // زمان کلاس بدون فاصله
+        token2: this.sanitizeSingleToken(options.studentName, 'دانش‌آموز'), // نام دانش‌آموز بدون فاصله
+        type: 'sms',
+      });
+
+      logger.info(`📤 [کاوه نگار] ارسال پیامک تایید کلاس به دانش‌آموز (${cleanPhone})...`);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
+        },
+        body: params.toString(),
+      });
+
+      const data: any = await response.json();
+      if (data?.return?.status === 200) {
+        logger.info(`✅ [کاوه نگار] پیامک تایید کلاس با موفقیت به دانش‌آموز ${cleanPhone} ارسال شد.`);
+        return { success: true, message: 'پیامک به دانش‌آموز ارسال شد' };
+      } else {
+        logger.warn(`⚠️ [کاوه نگار] عدم ارسال پیامک به دانش‌آموز (کد ${data?.return?.status}): ${data?.return?.message}`);
+        return { success: false, message: data?.return?.message };
+      }
+    } catch (err: any) {
+      // عدم ایجاد وقفه یا خطا در فرآیند سیستم در صورت قطع اینترنت، اعتبار ناکافی یا خطای سرویس‌دهنده
+      logger.warn(`⚠️ [کاوه نگار] خطای ارتباطی در ارسال پیامک دانش‌آموز: ${err.message}`);
+      return { success: false, message: err.message };
     }
   }
 

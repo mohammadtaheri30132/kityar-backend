@@ -264,8 +264,20 @@ export class TeacherOnlineClassController {
               action: 'teacher_accepted',
             },
           }).catch((err) => console.warn('Failed to send class acceptance notification:', err))
+
+          // ارسال پیامک الگوی کاوه‌نگار به دانش‌آموز (Requestaccepted)
+          const studentUser = await User.findById(booking.studentId).select('fullName phoneNumber').lean()
+          const studentPhone = (studentUser as any)?.phoneNumber
+          const studentName = (studentUser as any)?.fullName || 'دانش‌آموز'
+          if (studentPhone) {
+            SmsService.sendStudentRequestAccepted({
+              mobile: studentPhone,
+              studentName,
+              classTime: booking.scheduledAt,
+            }).catch((err) => console.warn('Failed to send class acceptance SMS to student:', err))
+          }
         } catch (notifErr) {
-          console.warn('Error queuing class acceptance notification:', notifErr)
+          console.warn('Error queuing class acceptance notification/SMS:', notifErr)
         }
 
         return {
