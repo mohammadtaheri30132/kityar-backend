@@ -11,6 +11,7 @@ import { requestLogger } from './core/middleware/requestLogger.js'
 import { errorHandler } from './core/middleware/errorHandler.js'
 import { logger } from './core/utils/logger'
 import { NativeSignalingServer } from './modules/classroom/native/ws/NativeSignalingServer.js'
+import { OnlineClassService } from './core/services/onlineClass.service.js'
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 // ==================== Modules Imports ====================
@@ -29,6 +30,7 @@ import publicEduContentRoutes from './modules/public/routes/public.eduContent.ro
 import chatRoutes from './modules/chat/chat.routes.js';
 import classroomRoutes from './modules/classroom/classroom.routes.js';
 import authRoutes from './modules/auth/auth.routes.js';
+import extensionRoutes from './modules/extension/extension.routes.js';
 import { backfillClassroomCodes } from './modules/teacher/controllers/teacher.classroom.controller.js';
 dotenv.config()
 
@@ -41,6 +43,9 @@ const allowedOrigins = [
   'http://localhost:5174',
   'http://localhost:5175',
   'http://127.0.0.1:5173',
+  'https://class.kitayar.ir',
+  'https://kitayar.ir',
+  'https://www.kitayar.ir',
   'https://vasehkhoneh.ir',
   'https://www.vasehkhoneh.ir',
   'http://192.168.1.128:5173', // 👈 این IP مک‌بوک شما اضافه شود
@@ -115,6 +120,7 @@ app.use('/api/student/auth', studentAuthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/classroom', classroomRoutes);
+app.use('/api/extension', extensionRoutes);
 // فردا روزی که بخش موبایل رو ساختی، فقط کافیه این دو خط رو از کامنت دربیاری:
 // import mobileRoutes from './modules/mobile/mobile.routes.js'
 // app.use('/api/mobile', mobileRoutes)
@@ -127,6 +133,7 @@ const startServer = async () => {
   try {
     await connectDB()
     await backfillClassroomCodes()
+    OnlineClassService.startNoShowAuditScheduler()
     const server = http.createServer(app)
     NativeSignalingServer.init(server)
 

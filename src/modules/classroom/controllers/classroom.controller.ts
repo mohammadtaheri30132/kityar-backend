@@ -2,7 +2,10 @@ import { Request, Response } from 'express'
 import { ClassroomService } from '../services/classroom.service.js'
 import { AuthAdapter } from '../adapters/AuthAdapter.js'
 import { LiveKitRtcProvider } from '../adapters/RtcProvider.js'
-import { ClassroomPricing } from '../../../core/models/ClassroomPricing.js'
+import { ClassroomPricing, DEFAULT_CLASSROOM_POLICY } from '../../../core/models/ClassroomPricing.js'
+import { OnlineClassBooking } from '../../../core/models/OnlineClassBooking.js'
+import { TeacherProfile } from '../../../core/models/TeacherProfile.js'
+import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
 import { ClassroomSession } from '../models/ClassroomSession.js'
 import { RoomManager } from '../native/services/RoomManager.js'
 import { logger } from '../../../core/utils/logger.js'
@@ -389,6 +392,23 @@ export class ClassroomController {
   }
 
   /**
+   * GET /api/classroom/rules
+   * Public/Student/Teacher rules and policy fetch
+   */
+  static async getRules(req: Request, res: Response): Promise<void> {
+    try {
+      const policy = await OnlineClassService.getSessionPolicy()
+      res.status(200).json({
+        success: true,
+        data: policy,
+      })
+    } catch (error: any) {
+      logger.error('[ClassroomController] getRules error:', error)
+      res.status(500).json({ success: false, message: 'خطا در دریافت قوانین کلاس آنلاین' })
+    }
+  }
+
+  /**
    * GET /api/classroom/pricing
    * Retrieve classroom pricing settings
    */
@@ -411,8 +431,23 @@ export class ClassroomController {
           extraStudentPrice: 50000,
           recordingRetentionHours: 48,
           autoRecordEnabled: true,
+          sessionPolicy: { ...DEFAULT_CLASSROOM_POLICY },
         })
       }
+
+      // Ensure session policy defaults if missing on existing record
+      if (!pricing.sessionPolicy || !pricing.sessionPolicy.studentRules?.length) {
+        pricing.sessionPolicy = {
+          unlockBeforeMinutes: pricing.sessionPolicy?.unlockBeforeMinutes ?? DEFAULT_CLASSROOM_POLICY.unlockBeforeMinutes,
+          teacherGraceMinutes: pricing.sessionPolicy?.teacherGraceMinutes ?? DEFAULT_CLASSROOM_POLICY.teacherGraceMinutes,
+          extraMinutes: pricing.sessionPolicy?.extraMinutes ?? DEFAULT_CLASSROOM_POLICY.extraMinutes,
+          endWarningMinutes: pricing.sessionPolicy?.endWarningMinutes ?? DEFAULT_CLASSROOM_POLICY.endWarningMinutes,
+          chatOpenHoursAfterEnd: pricing.sessionPolicy?.chatOpenHoursAfterEnd ?? DEFAULT_CLASSROOM_POLICY.chatOpenHoursAfterEnd,
+          teacherRules: pricing.sessionPolicy?.teacherRules?.length ? pricing.sessionPolicy.teacherRules : [...DEFAULT_CLASSROOM_POLICY.teacherRules],
+          studentRules: pricing.sessionPolicy?.studentRules?.length ? pricing.sessionPolicy.studentRules : [...DEFAULT_CLASSROOM_POLICY.studentRules],
+        }
+      }
+
       if (typeof pricing.recordingRetentionHours === 'number') {
         RoomManager.setRetentionHoursCache(pricing.recordingRetentionHours)
       }
@@ -425,7 +460,7 @@ export class ClassroomController {
 
   /**
    * PUT /api/classroom/pricing
-   * Admin update classroom pricing settings
+   * Admin update classroom pricing and session policy
    */
   static async updatePricing(req: Request, res: Response): Promise<void> {
     try {
@@ -436,6 +471,7 @@ export class ClassroomController {
         extraStudentPrice,
         recordingRetentionHours,
         autoRecordEnabled,
+        sessionPolicy,
       } = req.body
       let pricing = await ClassroomPricing.findOne({ key: 'default' })
       if (!pricing) {
@@ -459,6 +495,33 @@ export class ClassroomController {
 
       if (extraStudentPrice !== undefined) {
         pricing.extraStudentPrice = Math.max(0, Number(extraStudentPrice) || 0)
+      }
+
+      if (sessionPolicy && typeof sessionPolicy === 'object') {
+        if (!pricing.sessionPolicy) {
+          pricing.sessionPolicy = { ...DEFAULT_CLASSROOM_POLICY }
+        }
+        if (sessionPolicy.unlockBeforeMinutes !== undefined) {
+          pricing.sessionPolicy.unlockBeforeMinutes = Math.max(0, Number(sessionPolicy.unlockBeforeMinutes) || 0)
+        }
+        if (sessionPolicy.teacherGraceMinutes !== undefined) {
+          pricing.sessionPolicy.teacherGraceMinutes = Math.max(0, Number(sessionPolicy.teacherGraceMinutes) || 0)
+        }
+        if (sessionPolicy.extraMinutes !== undefined) {
+          pricing.sessionPolicy.extraMinutes = Math.max(0, Number(sessionPolicy.extraMinutes) || 0)
+        }
+        if (sessionPolicy.endWarningMinutes !== undefined) {
+          pricing.sessionPolicy.endWarningMinutes = Math.max(0, Number(sessionPolicy.endWarningMinutes) || 0)
+        }
+        if (sessionPolicy.chatOpenHoursAfterEnd !== undefined) {
+          pricing.sessionPolicy.chatOpenHoursAfterEnd = Math.max(0, Number(sessionPolicy.chatOpenHoursAfterEnd) || 0)
+        }
+        if (Array.isArray(sessionPolicy.teacherRules)) {
+          pricing.sessionPolicy.teacherRules = sessionPolicy.teacherRules.map((r: any) => String(r).trim()).filter(Boolean)
+        }
+        if (Array.isArray(sessionPolicy.studentRules)) {
+          pricing.sessionPolicy.studentRules = sessionPolicy.studentRules.map((r: any) => String(r).trim()).filter(Boolean)
+        }
       }
 
       if (recordingRetentionHours !== undefined) {
@@ -491,6 +554,104 @@ export class ClassroomController {
     } catch (error: any) {
       logger.error('[ClassroomController] updatePricing error:', error)
       res.status(500).json({ success: false, message: 'خطا در ذخیره تعرفه کلاس آنلاین' })
+    }
+  }
+
+  /**
+   * GET /api/classroom/admin/online-classes
+   * Admin: List all online class bookings with attendance & no-show filters
+   */
+  static async listAdminOnlineClasses(req: Request, res: Response): Promise<void> {
+    try {
+      const user = AuthAdapter.getUser(req)
+      if (!user || user.role !== 'admin') {
+        res.status(403).json({ success: false, message: 'فقط مدیران سیستم به این بخش دسترسی دارند' })
+        return
+      }
+
+      const page = Math.max(1, parseInt(req.query.page as string) || 1)
+      const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 20))
+      const skip = (page - 1) * limit
+      const { status, search, teacherNoShow } = req.query
+
+      const query: any = {}
+      if (status && status !== 'all') {
+        query.status = status
+      }
+      if (teacherNoShow === 'true' || teacherNoShow === '1') {
+        query.teacherNoShow = true
+      }
+      if (search && typeof search === 'string') {
+        query.$or = [
+          { topic: { $regex: search, $options: 'i' } },
+          { courseName: { $regex: search, $options: 'i' } },
+          { subjectName: { $regex: search, $options: 'i' } },
+          { bookingCode: { $regex: search, $options: 'i' } },
+        ]
+      }
+
+      const [bookings, total, totalNoShows, activeCount, completedCount] = await Promise.all([
+        OnlineClassBooking.find(query)
+          .populate('teacherId', 'fullName phoneNumber avatar username')
+          .populate('studentId', 'fullName phoneNumber avatar username')
+          .sort({ scheduledAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        OnlineClassBooking.countDocuments(query),
+        OnlineClassBooking.countDocuments({ teacherNoShow: true }),
+        OnlineClassBooking.countDocuments({ status: 'in_progress' }),
+        OnlineClassBooking.countDocuments({ status: 'completed' }),
+      ])
+
+      res.status(200).json({
+        success: true,
+        data: {
+          bookings,
+          pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit),
+          },
+          stats: {
+            total,
+            totalNoShows,
+            activeCount,
+            completedCount,
+          },
+        },
+      })
+    } catch (error: any) {
+      logger.error('[ClassroomController] listAdminOnlineClasses error:', error)
+      res.status(500).json({ success: false, message: 'خطا در بارگذاری کلاس‌های آنلاین' })
+    }
+  }
+
+  /**
+   * GET /api/classroom/admin/no-show-teachers
+   * Admin: List teachers with recorded no-shows
+   */
+  static async getNoShowTeachers(req: Request, res: Response): Promise<void> {
+    try {
+      const user = AuthAdapter.getUser(req)
+      if (!user || user.role !== 'admin') {
+        res.status(403).json({ success: false, message: 'فقط مدیران سیستم به این بخش دسترسی دارند' })
+        return
+      }
+
+      const teachers = await TeacherProfile.find({ noShowCount: { $gt: 0 } })
+        .populate('user', 'fullName phoneNumber avatar username email')
+        .sort({ noShowCount: -1 })
+        .lean()
+
+      res.status(200).json({
+        success: true,
+        data: teachers,
+      })
+    } catch (error: any) {
+      logger.error('[ClassroomController] getNoShowTeachers error:', error)
+      res.status(500).json({ success: false, message: 'خطا در بارگذاری گزارش عدم حضور دبیران' })
     }
   }
 }

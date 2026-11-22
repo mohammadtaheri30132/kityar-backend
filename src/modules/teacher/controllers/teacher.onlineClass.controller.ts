@@ -6,6 +6,7 @@ import { User } from '../../../core/models/User.js'
 import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
 import { WalletService } from '../../../core/services/wallet.service.js'
 import { SmsService } from '../../../core/services/sms.service.js'
+import { NotificationService } from '../../../core/services/notificationService.js'
 import { withTeacherBookingLock } from '../../../core/utils/bookingSlotLock.js'
 import {
   extractWeeklyScheduleSummary,
@@ -243,6 +244,30 @@ export class TeacherOnlineClassController {
         booking.status = 'confirmed'
         await booking.save()
 
+        // ارسال نوتیفیکیشن تایید کلاس به دانش‌آموز
+        try {
+          const teacherName = (req as any).user?.fullName || 'دبیر محترم'
+          NotificationService.send({
+            recipientType: 'student',
+            recipientUserId: booking.studentId?.toString(),
+            senderId: userId.toString(),
+            senderName: teacherName,
+            senderRole: 'teacher',
+            title: 'کلاس آنلاین شما تایید شد! ✅',
+            body: `${teacherName} درخواست کلاس «${booking.title || booking.subjectName}» را تایید کرد. کلاس در ساعت مقرر برگزار خواهد شد.`,
+            type: 'ONLINE_CLASS',
+            priority: 'high',
+            targetId: booking._id.toString(),
+            data: {
+              bookingId: booking._id.toString(),
+              bookingCode: booking.bookingCode,
+              action: 'teacher_accepted',
+            },
+          }).catch((err) => console.warn('Failed to send class acceptance notification:', err))
+        } catch (notifErr) {
+          console.warn('Error queuing class acceptance notification:', notifErr)
+        }
+
         return {
           statusCode: 200,
           success: true,
@@ -329,6 +354,31 @@ export class TeacherOnlineClassController {
         await booking.save()
       }
 
+      // ارسال نوتیفیکیشن دعوت برای دانش‌آموز
+      try {
+        const teacherName = (req as any).user?.fullName || 'دبیر محترم'
+        NotificationService.send({
+          recipientType: 'student',
+          recipientPhone: cleanPhone,
+          recipientUserId: invitedUser?._id?.toString(),
+          senderId: userId.toString(),
+          senderName: teacherName,
+          senderRole: 'teacher',
+          title: 'دعوت به کلاس آنلاین 🎓',
+          body: `${teacherName} شما را به کلاس آنلاین «${booking.title || booking.subjectName}» دعوت کرد.`,
+          type: 'ONLINE_CLASS',
+          priority: 'normal',
+          targetId: booking._id.toString(),
+          data: {
+            bookingId: booking._id.toString(),
+            bookingCode: booking.bookingCode,
+            action: 'teacher_invitation',
+          },
+        }).catch((err) => console.warn('Failed to send teacher invite notification:', err))
+      } catch (notifErr) {
+        console.warn('Error queuing teacher invite notification:', notifErr)
+      }
+
       return res.json({
         success: true,
         message: 'دانش‌آموز با موفقیت به کلاس دعوت شد و در فهرست کلاس‌های او نمایش داده می‌شود.',
@@ -368,6 +418,31 @@ export class TeacherOnlineClassController {
       }
 
       await booking.save()
+
+      // ارسال نوتیفیکیشن رد کلاس به دانش‌آموز
+      try {
+        const teacherName = (req as any).user?.fullName || 'دبیر محترم'
+        NotificationService.send({
+          recipientType: 'student',
+          recipientUserId: booking.studentId?.toString(),
+          senderId: userId.toString(),
+          senderName: teacherName,
+          senderRole: 'teacher',
+          title: 'عدم پذیرش کلاس آنلاین ❌',
+          body: `درخواست کلاس «${booking.title || booking.subjectName}» توسط دبیر تایید نشد و هزینه پرداختی به کیف پول شما برگشت داده شد.`,
+          type: 'ONLINE_CLASS',
+          priority: 'high',
+          targetId: booking._id.toString(),
+          data: {
+            bookingId: booking._id.toString(),
+            bookingCode: booking.bookingCode,
+            action: 'teacher_rejected',
+            reason: booking.rejectionReason,
+          },
+        }).catch((err) => console.warn('Failed to send rejection notification:', err))
+      } catch (notifErr) {
+        console.warn('Error queuing rejection notification:', notifErr)
+      }
 
       return res.json({
         success: true,

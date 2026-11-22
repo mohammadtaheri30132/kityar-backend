@@ -13,6 +13,7 @@ import { RoomManager } from '../native/services/RoomManager.js'
 import { AuthAdapter } from '../adapters/AuthAdapter.js'
 import { SessionSourceAdapter } from '../adapters/SessionSourceAdapter.js'
 import { OnlineClassBooking } from '../../../core/models/OnlineClassBooking.js'
+import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
 import { logger } from '../../../core/utils/logger.js'
 
 /**
@@ -207,8 +208,46 @@ export class PlugNmeetController {
 
         const bookingMeta =
           source.sourceType === 'online_class_booking'
-            ? await OnlineClassBooking.findById(source.sourceId).select('bookingCode meeting capacity').lean()
+            ? await OnlineClassBooking.findById(source.sourceId)
             : null
+
+        // Enforce session policy (Locking & Teacher Grace Period)
+        if (!linkOnly && bookingMeta && bookingMeta.scheduledAt) {
+          const policy = await OnlineClassService.getSessionPolicy()
+          const scheduledMs = new Date(bookingMeta.scheduledAt).getTime()
+          const now = Date.now()
+          const graceMs = (policy.teacherGraceMinutes ?? 30) * 60 * 1000
+          const unlockBeforeMs = (policy.unlockBeforeMinutes ?? 5) * 60 * 1000
+
+          // Check if teacher exceeded 30 minutes grace period
+          if (!bookingMeta.teacherJoinedAt && now > scheduledMs + graceMs) {
+            await OnlineClassService.handleTeacherNoShow(bookingMeta)
+            res.status(410).json({
+              success: false,
+              code: 'TEACHER_NO_SHOW',
+              message:
+                'به دلیل عدم حضور دبیر ظرف ۳۰ دقیقه پس از ساعت مقرر، کلاس لغو و مبلغ پرداختی به کیف پول دانش‌آموز مسترد گردید.',
+            })
+            return
+          }
+
+          // Check if room is still locked (more than 5 mins before start)
+          const unlockTime = scheduledMs - unlockBeforeMs
+          if (now < unlockTime) {
+            const remainingSeconds = Math.ceil((unlockTime - now) / 1000)
+            res.status(423).json({
+              success: false,
+              isLocked: true,
+              code: 'CLASS_LOCKED',
+              message: `کلاس آنلاین قفل است و ${policy.unlockBeforeMinutes} دقیقه قبل از شروع کلاس باز می‌شود.`,
+              unlocksAt: new Date(unlockTime),
+              scheduledAt: bookingMeta.scheduledAt,
+              remainingSeconds,
+            })
+            return
+          }
+        }
+
         const cleanCode = (bookingMeta?.bookingCode || source.sourceId).replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
         const roomName = bookingMeta?.meeting?.roomName || `kitayar-class-${cleanCode}`
 
@@ -293,12 +332,20 @@ export class PlugNmeetController {
         }
 
         if (user) {
-          const isTeacherRole =
-            user.role === 'teacher' ||
-            user.role === 'admin' ||
-            (session.teacherId && session.teacherId.toString() === user.userId)
+          const isClassTeacher = Boolean(session.teacherId && session.teacherId.toString() === user.userId)
+          const isClassStudent = Boolean(
+            (session.studentId && session.studentId.toString() === user.userId) ||
+            (session.invitedStudentIds || []).some((id) => id.toString() === user.userId)
+          )
 
-          isAdmin = !!isTeacherRole
+          let isTeacherRole = false
+          if (session.teacherId) {
+            isTeacherRole = isClassTeacher || (user.role === 'admin' && !isClassStudent)
+          } else {
+            isTeacherRole = (user.role === 'teacher' || user.role === 'admin') && !isClassStudent
+          }
+
+          isAdmin = isTeacherRole
           role = isAdmin ? 'teacher' : 'student'
           participantName = user.name || (isAdmin ? 'استاد کلاس' : 'دانش‌آموز')
           participantIdentity = user.userId
@@ -330,6 +377,28 @@ export class PlugNmeetController {
       const roomId = session.roomName || session.plugNmeetRoomId || sessionId
       if (!linkOnly) {
         await RoomManager.getOrCreateRoom(roomId, session.title, session.teacherId?.toString(), session.maxParticipants || 20)
+
+        if (isAdmin && session.bookingId) {
+          try {
+            const booking = await OnlineClassBooking.findById(session.bookingId)
+            if (booking && !booking.teacherJoinedAt) {
+              const policy = await OnlineClassService.getSessionPolicy()
+              booking.teacherJoinedAt = new Date()
+              const timing = OnlineClassService.calculateClassEndTime(
+                booking.scheduledAt,
+                booking.teacherJoinedAt,
+                booking.durationMinutes || 90,
+                policy.extraMinutes ?? 5
+              )
+              booking.effectiveStartAt = timing.effectiveStartAt
+              booking.endsAt = timing.endsAt
+              booking.status = 'in_progress'
+              await booking.save()
+            }
+          } catch (bErr) {
+            logger.warn('[PlugNmeetController] Error updating booking start timing on teacher join:', bErr)
+          }
+        }
 
         if (session.status === 'waiting') {
           session.status = 'active'

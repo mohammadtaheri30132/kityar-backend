@@ -1,11 +1,12 @@
 import mongoose, { Document, Schema, Types } from 'mongoose'
 
-export type ConversationType = 'direct' | 'question' | 'class'
+export type ConversationType = 'direct' | 'question' | 'class' | 'online_class'
 
 export interface IConversation extends Document {
   type: ConversationType
   participants: Types.ObjectId[]
   questionRequestId?: Types.ObjectId
+  onlineClassBookingId?: Types.ObjectId
   lastMessage?: string
   lastMessageAt?: Date
   lastMessageSender?: Types.ObjectId
@@ -19,7 +20,7 @@ const conversationSchema = new Schema<IConversation>(
   {
     type: {
       type: String,
-      enum: ['direct', 'question', 'class'],
+      enum: ['direct', 'question', 'class', 'online_class'],
       default: 'direct',
     },
     participants: [
@@ -33,6 +34,7 @@ const conversationSchema = new Schema<IConversation>(
       type: Schema.Types.ObjectId,
       ref: 'QuestionRequest',
     },
+    onlineClassBookingId: { type: Schema.Types.ObjectId, ref: 'OnlineClassBooking', index: true, sparse: true },
     lastMessage: { type: String, default: '' },
     lastMessageAt: { type: Date, default: Date.now },
     lastMessageSender: { type: Schema.Types.ObjectId, ref: 'User' },

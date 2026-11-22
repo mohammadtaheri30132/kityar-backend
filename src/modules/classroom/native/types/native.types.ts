@@ -20,6 +20,7 @@ export interface INativeParticipant {
   micState: MicrophoneState
   cameraEnabled?: boolean
   screenShareEnabled?: boolean
+  canShareScreen?: boolean
   handRaised?: boolean
   isSpeaker?: boolean
   isModerator?: boolean
@@ -131,6 +132,12 @@ export interface INativeRoom {
   createdAt: number
   startedAt?: number
   endedAt?: number
+  scheduledAt?: number
+  teacherJoinedAt?: number
+  effectiveStartAt?: number
+  endsAt?: number
+  durationMinutes?: number
+  endWarningSent?: boolean
 }
 
 export interface SignalingIceServer {
@@ -153,6 +160,7 @@ export interface SignalingIncomingMessage {
     | 'start_recording'
     | 'stop_recording'
     | 'teacher_set_permission'
+    | 'teacher_set_screen_share_permission'
     | 'teacher_mute_all'
     | 'teacher_remove_participant'
     | 'teacher_end_room'
@@ -172,6 +180,7 @@ export interface SignalingIncomingMessage {
   candidate?: any
   enabled?: boolean
   micBlocked?: boolean
+  allowed?: boolean
   token?: string
   ticketCode?: string
   attendeeKey?: string
@@ -205,8 +214,14 @@ export interface SignalingOutgoingMessage {
     | 'chat_message'
     | 'recording_state_changed'
     | 'permission_state_changed'
+    | 'screen_share_permission_changed'
     | 'participant_removed'
     | 'room_ended'
+    | 'session_timing'
+    | 'class_ending_soon'
+    | 'class_end_warning'
+    | 'room_timer_sync'
+    | 'teacher_presence'
     | 'pong'
     | 'error'
   roomId?: string

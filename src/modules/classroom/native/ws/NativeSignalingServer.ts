@@ -59,8 +59,9 @@ export class NativeSignalingServer {
       this.handleConnection(ws, request)
     })
 
-    // Heartbeat checker interval (every 25 seconds)
+    // Heartbeat & Room Timer checker interval (every 10 seconds)
     const interval = setInterval(() => {
+      const now = Date.now()
       this.wss.clients.forEach(wsClient => {
         const client = wsClient as AuthenticatedSocket
         if (!client.isAlive) {
@@ -75,7 +76,26 @@ export class NativeSignalingServer {
           // ignore
         }
       })
-    }, 25000)
+
+      // Check 5-minute warning for rooms nearing completion
+      RoomManager.getRooms().forEach((room, rId) => {
+        if (room.endsAt && room.participants.size > 0) {
+          const remainingMs = room.endsAt - now
+          if (remainingMs <= 5 * 60 * 1000 && remainingMs > 0 && !room.endWarningSent) {
+            room.endWarningSent = true
+            this.broadcastToRoom(rId, '', {
+              type: 'class_end_warning',
+              roomId: rId,
+              payload: {
+                remainingMinutes: 5,
+                remainingSeconds: Math.ceil(remainingMs / 1000),
+                message: 'تنها ۵ دقیقه تا پایان کلاس آنلاین باقی مانده است ⏳',
+              },
+            })
+          }
+        }
+      })
+    }, 10000)
 
     this.wss.on('close', () => {
       clearInterval(interval)
@@ -218,6 +238,15 @@ export class NativeSignalingServer {
         }
         if (!msg.targetPeerId) return
         this.handleTeacherSetPermission(roomId, msg.targetPeerId, !!msg.micBlocked)
+        break
+      }
+
+      case 'teacher_set_screen_share_permission': {
+        if (!this.isManagerSocket(ws, roomId)) {
+          return this.sendError(ws, 'PERMISSION_DENIED', 'تنها مدیر جلسه امکان تغییر دسترسی‌ها را دارد')
+        }
+        if (!msg.targetPeerId) return
+        this.handleTeacherSetScreenSharePermission(roomId, msg.targetPeerId, !!msg.allowed)
         break
       }
 
@@ -446,10 +475,14 @@ export class NativeSignalingServer {
         const ticket = sessionForTicket?.inviteTickets?.find((t: any) => t.ticketCode === ticketCode)
         if (ticket) {
           const ticketUserId = ticket.userId ? ticket.userId.toString() : undefined
+          let role = (ticket.role as ParticipantRole) || 'student'
+          if (requestedRole === 'student') {
+            role = 'student'
+          }
           authUser = {
             userId: ticketUserId,
-            name: clientDisplayName?.trim() || ticket.name || (ticket.role === 'teacher' ? 'استاد کلاس' : 'دانش‌آموز'),
-            role: (ticket.role as ParticipantRole) || 'student',
+            name: clientDisplayName?.trim() || ticket.name || (role === 'teacher' ? 'استاد کلاس' : 'دانش‌آموز'),
+            role,
           }
           sessionKey = ticketUserId ? `user:${ticketUserId}` : `ticket:${ticket.ticketCode}`
         } else if (!isExplicitTestRoom) {
@@ -491,6 +524,19 @@ export class NativeSignalingServer {
 
         if (authUser) {
           const authed = authUser
+          if (matchedSession) {
+            const isSessionTeacher = Boolean(matchedSession.teacherId && matchedSession.teacherId.toString() === authed.userId)
+            const isSessionStudent = Boolean(
+              (matchedSession.studentId && matchedSession.studentId.toString() === authed.userId) ||
+              (matchedSession.invitedStudentIds || []).some((id: any) => id.toString() === authed.userId)
+            )
+
+            if (isSessionStudent || (requestedRole === 'student' && !isSessionTeacher)) {
+              authed.role = 'student'
+            } else if (authed.role === 'teacher' && matchedSession.teacherId && !isSessionTeacher) {
+              authed.role = 'student'
+            }
+          }
           if (matchedSession?.sourceType === 'online_class_booking') {
             const bookingSource = matchedSession.bookingId
               ? await SessionSourceAdapter.resolveSource(matchedSession.bookingId.toString())
@@ -569,11 +615,15 @@ export class NativeSignalingServer {
 
     // Single teacher enforcement in interactive classes (multiple managers allowed in seminars)
     if (matchedUiMode !== 'seminar' && authUser.role === 'teacher' && hasOtherTeacher) {
-      return this.sendError(
-        ws,
-        'TEACHER_ALREADY_PRESENT',
-        'در حال حاضر یک معلم در کلاس حضور دارد و امکان ورود معلم دوم وجود ندارد.'
-      )
+      if (room.teacherId && room.teacherId !== authUser.userId) {
+        authUser.role = 'student'
+      } else {
+        return this.sendError(
+          ws,
+          'TEACHER_ALREADY_PRESENT',
+          'در حال حاضر یک معلم در کلاس حضور دارد و امکان ورود معلم دوم وجود ندارد.'
+        )
+      }
     }
 
     const isPrimaryManager = authUser.role === 'teacher' || authUser.role === 'admin'
@@ -599,6 +649,8 @@ export class NativeSignalingServer {
       role: authUser.role,
       micState: isSeminarAudience ? 'blocked' : 'disabled',
       cameraEnabled: false,
+      screenShareEnabled: false,
+      canShareScreen: isPrimaryManager || authUser.role === 'teacher' || authUser.role === 'admin',
       handRaised: false,
       isSpeaker: isPrimaryManager,
       isModerator: isPrimaryManager,
@@ -638,9 +690,78 @@ export class NativeSignalingServer {
           status: room.status,
           maxParticipants: room.maxParticipants,
           isTestRoom: room.isTestRoom,
+          scheduledAt: room.scheduledAt,
+          effectiveStartAt: room.effectiveStartAt,
+          endsAt: room.endsAt,
+          durationMinutes: room.durationMinutes,
+        },
+        timer: {
+          scheduledAt: room.scheduledAt,
+          teacherJoinedAt: room.teacherJoinedAt,
+          effectiveStartAt: room.effectiveStartAt,
+          endsAt: room.endsAt,
+          durationMinutes: room.durationMinutes || 90,
+          extraMinutes: 5,
+        },
+        teacherPresence: {
+          present: hasOtherTeacher || isPrimaryManager,
+          teacherName: isPrimaryManager ? participant.name : undefined,
+          lateThresholdMinutes: 30,
+          autoCancelAt: room.scheduledAt ? room.scheduledAt + 30 * 60 * 1000 : undefined,
+          scheduledAt: room.scheduledAt,
         },
       },
     })
+
+    // If teacher joined, initialize or sync the room countdown timer
+    if (participant.role === 'teacher') {
+      if (!room.teacherJoinedAt) {
+        room.teacherJoinedAt = Date.now()
+        const scheduledMs = room.scheduledAt || Date.now()
+        const effectiveStart = room.teacherJoinedAt < scheduledMs ? scheduledMs : room.teacherJoinedAt
+        const totalDurationMs = ((room.durationMinutes || 90) + 5) * 60 * 1000
+        room.effectiveStartAt = effectiveStart
+        room.endsAt = effectiveStart + totalDurationMs
+      }
+
+      // Broadcast timer sync & teacher presence to all participants
+      this.broadcastToRoom(roomId, '', {
+        type: 'room_timer_sync',
+        roomId,
+        payload: {
+          scheduledAt: room.scheduledAt,
+          teacherJoinedAt: room.teacherJoinedAt,
+          effectiveStartAt: room.effectiveStartAt,
+          endsAt: room.endsAt,
+          durationMinutes: room.durationMinutes || 90,
+          extraMinutes: 5,
+          teacherPresent: true,
+          teacherName: participant.name,
+        },
+      })
+      this.broadcastToRoom(roomId, '', {
+        type: 'teacher_presence',
+        roomId,
+        payload: {
+          present: true,
+          teacherName: participant.name,
+        },
+      })
+    } else if (!hasOtherTeacher) {
+      // If student joined and no teacher is present yet, notify student
+      this.sendMessage(ws, {
+        type: 'teacher_presence',
+        roomId,
+        payload: {
+          present: false,
+          lateThresholdMinutes: 30,
+          autoCancelAt: room.scheduledAt ? room.scheduledAt + 30 * 60 * 1000 : undefined,
+          scheduledAt: room.scheduledAt,
+          modalMessage:
+            'معلم هنوز وارد کلاس نشده است. در صورتی که تا ۳۰ دقیقه پس از زمان شروع معلم حضور پیدا نکند، کلاس لغو شده و مبلغ پرداختی به صورت خودکار به کیف پول شما بازگردانده می‌شود.',
+        },
+      })
+    }
 
     this.broadcastToRoom(roomId, peerId, {
       type: 'participant_joined',
@@ -764,6 +885,14 @@ export class NativeSignalingServer {
   private handleSetScreenShare(ws: AuthenticatedSocket, roomId: string, enabled: boolean) {
     const peerId = ws.peerId
     if (!peerId) return
+    const room = RoomManager.getRoom(roomId)
+    const participant = room?.participants.get(peerId)
+    if (!participant) return
+
+    const isTeacher = participant.isTeacher || participant.role === 'teacher' || participant.role === 'admin' || participant.isModerator
+    if (enabled && !isTeacher && !participant.canShareScreen) {
+      return this.sendError(ws, 'PERMISSION_DENIED', 'اشتراک صفحه تنها با اجازه معلم امکان‌پذیر است.')
+    }
 
     const updated = RoomManager.updateScreenShareState(roomId, peerId, enabled)
     if (updated) {
@@ -771,6 +900,17 @@ export class NativeSignalingServer {
         type: 'screen_share_state_changed',
         roomId,
         payload: { peerId, enabled },
+      })
+    }
+  }
+
+  private handleTeacherSetScreenSharePermission(roomId: string, targetPeerId: string, allowed: boolean) {
+    const updated = RoomManager.setParticipantScreenSharePermission(roomId, targetPeerId, allowed)
+    if (updated) {
+      this.broadcastToRoom(roomId, null, {
+        type: 'screen_share_permission_changed',
+        roomId,
+        payload: { peerId: targetPeerId, canShareScreen: allowed },
       })
     }
   }

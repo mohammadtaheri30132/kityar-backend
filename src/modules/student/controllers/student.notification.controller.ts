@@ -10,16 +10,20 @@ export class StudentNotificationController {
   static async getNotifications(req: Request, res: Response) {
     try {
       const studentPhone = (req as any).student?.phoneNumber || (req as any).user?.phoneNumber;
+      const studentId = (req as any).student?._id || (req as any).user?._id;
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 30;
       const skip = (page - 1) * limit;
 
-      const query: any = {
-        $or: [
-          { recipientType: 'student', recipientPhone: studentPhone },
-          { recipientType: 'all' },
-        ],
-      };
+      const orConditions: any[] = [{ recipientType: 'all' }];
+      if (studentPhone) {
+        orConditions.push({ recipientType: 'student', recipientPhone: studentPhone });
+      }
+      if (studentId) {
+        orConditions.push({ recipientType: 'student', recipientUserId: studentId });
+      }
+
+      const query: any = { $or: orConditions };
 
       const [notifications, total, unreadCount] = await Promise.all([
         Notification.find(query)
@@ -53,11 +57,13 @@ export class StudentNotificationController {
   static async getUnreadCount(req: Request, res: Response) {
     try {
       const studentPhone = (req as any).student?.phoneNumber || (req as any).user?.phoneNumber;
+      const studentId = (req as any).student?._id || (req as any).user?._id;
+      const orConditions: any[] = [{ recipientType: 'all' }];
+      if (studentPhone) orConditions.push({ recipientType: 'student', recipientPhone: studentPhone });
+      if (studentId) orConditions.push({ recipientType: 'student', recipientUserId: studentId });
+
       const count = await Notification.countDocuments({
-        $or: [
-          { recipientType: 'student', recipientPhone: studentPhone },
-          { recipientType: 'all' },
-        ],
+        $or: orConditions,
         isRead: false,
       });
 
@@ -98,12 +104,14 @@ export class StudentNotificationController {
   static async markAllAsRead(req: Request, res: Response) {
     try {
       const studentPhone = (req as any).student?.phoneNumber || (req as any).user?.phoneNumber;
+      const studentId = (req as any).student?._id || (req as any).user?._id;
+      const orConditions: any[] = [{ recipientType: 'all' }];
+      if (studentPhone) orConditions.push({ recipientType: 'student', recipientPhone: studentPhone });
+      if (studentId) orConditions.push({ recipientType: 'student', recipientUserId: studentId });
+
       await Notification.updateMany(
         {
-          $or: [
-            { recipientType: 'student', recipientPhone: studentPhone },
-            { recipientType: 'all' },
-          ],
+          $or: orConditions,
           isRead: false,
         },
         {

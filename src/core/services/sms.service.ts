@@ -38,7 +38,14 @@ export class SmsService {
    * نرمال‌سازی شماره تلفن همراه به فرمت استاندارد ۱۱ رقمی 09xxxxxxxxx
    */
   public static normalizePhone(phone: string): string {
-    let clean = (phone || '').toString().replace(/[^0-9]/g, '');
+    if (!phone) return '';
+    let clean = phone
+      .toString()
+      .trim()
+      .replace(/[۰-۹]/g, (d) => '0123456789'['۰۱۲۳۴۵۶۷۸۹'.indexOf(d)])
+      .replace(/[٠-٩]/g, (d) => '0123456789'['٠١٢٣٤٥٦٧٨٩'.indexOf(d)])
+      .replace(/[^0-9]/g, '');
+
     if (clean.startsWith('98') && clean.length === 12) {
       clean = '0' + clean.substring(2);
     }
@@ -93,26 +100,7 @@ export class SmsService {
     const apiKey = process.env.KAVENEGAR_API_KEY || this.apiKey;
     const template = process.env.KAVENEGAR_TEMPLATE || this.template;
 
-    // حالت توسعه بدون کلید کاوه‌نگار
-    if (!this.isProductionSms()) {
-      const mockOtp = '12345';
-      otpCache.set(cleanPhone, {
-        code: mockOtp,
-        expiresAt: now + 5 * 60 * 1000,
-        resendAvailableAt: now + this.COOLDOWN_SECONDS * 1000,
-        sentAt: now,
-      });
-
-      logger.info(`📲 [کاوه نگار - حالت توسعه] ارسال کد تایید به ${cleanPhone}: ${mockOtp}`);
-      return {
-        success: true,
-        remainingSeconds: this.COOLDOWN_SECONDS,
-        message: 'کد تایید ارسال شد (کد تستی: ۱۲۳۴۵)',
-        otp: mockOtp,
-      };
-    }
-
-    // تولید کد تصادفی ۵ رقمی
+    // تولید کد تصادفی ۵ رقمی واقعی
     const randomOtp = Math.floor(10000 + Math.random() * 90000).toString();
     otpCache.set(cleanPhone, {
       code: randomOtp,
@@ -137,7 +125,7 @@ export class SmsService {
         };
       } else {
         logger.error(`❌ [کاوه نگار] خطا در ارسال پیامک:`, data);
-        otpCache.delete(cleanPhone); // در صورت بروز خطای وب‌سرویس، قفل آزاد شود تا کاربر گیر نکند
+        otpCache.delete(cleanPhone);
         return { success: false, message: data?.return?.message || 'خطا در وب‌سرویس ارسال پیامک کاوه‌نگار' };
       }
     } catch (error: any) {
@@ -174,12 +162,7 @@ export class SmsService {
     const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
     const cleanOtp = enteredOtp.toString().trim();
 
-    // ۱. کد ثابت ۱۲۳۴۵ تا زمانی که کاربر در مرحله تست و استقرار است همیشه معتبر است
-    if (cleanOtp === '12345') {
-      return true;
-    }
-
-    // ۲. بررسی در کش اگر کد دیگری فرستاده شده باشد
+    // بررسی دقیق در کش OTP معتبر ارسال‌شده با کاوه‌نگار
     const cached = otpCache.get(cleanPhone);
     if (cached) {
       if (Date.now() > cached.expiresAt) {

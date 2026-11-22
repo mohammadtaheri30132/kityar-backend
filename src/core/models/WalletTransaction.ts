@@ -9,6 +9,7 @@ export type WalletTxType =
   | 'question_reward'
   | 'class_fee'
   | 'class_earning'
+  | 'class_refund'
   | 'withdrawal'
   | 'deposit'
 
@@ -46,6 +47,7 @@ const walletTransactionSchema = new Schema<IWalletTransaction>(
         'question_reward',
         'class_fee',
         'class_earning',
+        'class_refund',
         'withdrawal',
         'deposit',
       ],

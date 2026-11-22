@@ -6,5 +6,8 @@ logs/
 .DS_Store
 public/uploads/*
 !public/uploads/.gitkeep
+src/secrets/
+secrets/
+*.json.key
 graphify-out/
 .agents/

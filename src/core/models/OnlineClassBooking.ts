@@ -87,6 +87,13 @@ export interface IOnlineClassBooking extends Document {
   payment: IBookingPayment
   meeting: IBookingMeeting
   review?: IBookingReview
+  teacherJoinedAt?: Date
+  effectiveStartAt?: Date
+  endsAt?: Date
+  endWarningSentAt?: Date
+  teacherNoShow?: boolean
+  teacherNoShowAt?: Date
+  rulesAcceptances?: { userId: Types.ObjectId; role: 'teacher' | 'student'; acceptedAt: Date }[]
   createdAt: Date
   updatedAt: Date
 }
@@ -227,6 +234,24 @@ const onlineClassBookingSchema = new Schema<IOnlineClassBooking>(
       isComplaint: { type: Boolean, default: false },
       complaintText: { type: String },
       reviewedAt: { type: Date },
+    },
+    // Live session timing: class clock starts when the teacher joins (never before scheduledAt)
+    teacherJoinedAt: { type: Date },
+    effectiveStartAt: { type: Date },
+    endsAt: { type: Date },
+    endWarningSentAt: { type: Date },
+    teacherNoShow: { type: Boolean, default: false, index: true },
+    teacherNoShowAt: { type: Date },
+    rulesAcceptances: {
+      type: [
+        {
+          userId: { type: Schema.Types.ObjectId, ref: 'User' },
+          role: { type: String, enum: ['teacher', 'student'] },
+          acceptedAt: { type: Date, default: Date.now },
+          _id: false,
+        },
+      ],
+      default: [],
     },
   },
   { timestamps: true }

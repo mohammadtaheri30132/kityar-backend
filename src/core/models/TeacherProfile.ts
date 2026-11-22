@@ -69,6 +69,8 @@ export interface ITeacherProfile extends Document {
   rating: number
   ratingsCount: number
   rankingScore: number
+  noShowCount: number
+  lastNoShowAt?: Date
   onlineClassBasePrice?: number
   onlineClassDurations?: Record<string, boolean>
   teachingSubjects?: string[]
@@ -258,6 +260,8 @@ const teacherProfileSchema = new Schema<ITeacherProfile>(
       type: Number,
       default: 100,
     },
+    noShowCount: { type: Number, default: 0 },
+    lastNoShowAt: { type: Date },
     onlineClassBasePrice: {
       type: Number,
       default: 500000,

@@ -62,4 +62,8 @@ router.get('/conversations', ChatController.getConversations);
 router.get('/conversations/:conversationId/messages', ChatController.getConversationMessages);
 router.post('/conversations/:conversationId/messages', ChatController.sendConversationMessage);
 
+// گفتگوی کلاس آنلاین میان معلم و دانش‌آموز (فعال تا ۲۴ ساعت پس از پایان کلاس)
+router.get('/online-class/:bookingId', ChatController.getOnlineClassConversation);
+router.post('/online-class/:bookingId', ChatController.getOnlineClassConversation);
+
 export default router;

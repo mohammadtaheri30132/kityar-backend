@@ -18,6 +18,7 @@ import {
 import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
 import { WalletService } from '../../../core/services/wallet.service.js'
 import { SmsService } from '../../../core/services/sms.service.js'
+import { NotificationService } from '../../../core/services/notificationService.js'
 import { TeacherReview } from '../../../core/models/TeacherReview.js'
 import { ClassroomSession } from '../../classroom/models/ClassroomSession.js'
 import { RoomManager } from '../../classroom/native/services/RoomManager.js'
@@ -563,6 +564,31 @@ export class StudentOnlineClassController {
           { upsert: true }
         )
 
+        // ارسال فوری پوش نوتیفیکیشن و اعلان درون‌برنامه‌ای به دبیر
+        try {
+          const requesterName = (requesterUser as any)?.fullName || 'دانش‌آموز'
+          NotificationService.send({
+            recipientType: 'teacher',
+            recipientUserId: teacherUserId.toString(),
+            senderId: studentId.toString(),
+            senderName: requesterName,
+            senderRole: 'student',
+            title: 'درخواست کلاس آنلاین جدید 📚',
+            body: `${requesterName} برای مبحث «${topic.trim()}» درخواست کلاس آنلاین ثبت کرده است. برای پذیرش ۳۰ دقیقه فرصت دارید.`,
+            type: 'ONLINE_CLASS',
+            priority: 'high',
+            targetId: booking._id.toString(),
+            data: {
+              bookingId: booking._id.toString(),
+              bookingCode: booking.bookingCode,
+              topic: topic.trim(),
+              scheduledAt: startTime.toISOString(),
+            },
+          }).catch((err) => logger.warn('Failed to send class request notification to teacher:', err))
+        } catch (notifErr) {
+          logger.warn('Error queuing class booking notification:', notifErr)
+        }
+
         return {
           statusCode: 200,
           body: {
@@ -962,6 +988,32 @@ export class StudentOnlineClassController {
         { upsert: true }
       )
 
+      // ارسال نوتیفیکیشن دعوت برای دوست
+      try {
+        const inviter = await User.findById(currentUserId).select('fullName')
+        const inviterName = (inviter as any)?.fullName || 'دوست شما'
+        NotificationService.send({
+          recipientType: 'student',
+          recipientPhone: cleanPhone,
+          recipientUserId: invitedUser?._id,
+          senderId: currentUserId.toString(),
+          senderName: inviterName,
+          senderRole: 'student',
+          title: 'دعوت به کلاس آنلاین 🎓',
+          body: `${inviterName} شما را به کلاس آنلاین «${booking.title || booking.subjectName}» دعوت کرد.`,
+          type: 'ONLINE_CLASS',
+          priority: 'normal',
+          targetId: booking._id.toString(),
+          data: {
+            bookingId: booking._id.toString(),
+            bookingCode: booking.bookingCode,
+            action: 'friend_invitation',
+          },
+        }).catch((err) => logger.warn('Failed to send friend invite notification:', err))
+      } catch (notifErr) {
+        logger.warn('Error in friend invite notification:', notifErr)
+      }
+
       return res.json({
         success: true,
         message: 'دعوت‌نامه با موفقیت برای دوست شما ثبت شد.',
@@ -1236,6 +1288,38 @@ export class StudentOnlineClassController {
             `استاد گرامی، یک درخواست کلاس آنلاین ۱.۵ ساعته برای درس «${subjectName}» در کیتایار ثبت شد. لطفاً به میز کار خود مراجعه کنید.`
           ).catch(() => {})
         }
+      }
+
+      // ارسال پوش نوتیفیکیشن و اعلان به همه معلمان انتخاب شده
+      try {
+        const studentUser = await User.findById(studentId).select('fullName')
+        const studentName = (studentUser as any)?.fullName || 'دانش‌آموز'
+        const teacherUserIds = targetList.map((t: any) => t.toString())
+        const teacherPhones = teacherProfiles
+          .map((p) => (p.user as any)?.phoneNumber)
+          .filter(Boolean)
+
+        NotificationService.send({
+          recipientType: 'teacher',
+          recipientUserIds: teacherUserIds,
+          recipientPhones: teacherPhones,
+          senderId: studentId.toString(),
+          senderName: studentName,
+          senderRole: 'student',
+          title: 'درخواست کلاس آنلاین جدید 📚',
+          body: `${studentName} درخواست کلاس ۱.۵ ساعته «${topic.trim()}» ثبت کرده است. برای پذیرش ۳۰ دقیقه فرصت دارید.`,
+          type: 'ONLINE_CLASS',
+          priority: 'high',
+          targetId: booking._id.toString(),
+          data: {
+            bookingId: booking._id.toString(),
+            bookingCode: booking.bookingCode,
+            topic: topic.trim(),
+            scheduledAt: startTime.toISOString(),
+          },
+        }).catch((err) => logger.warn('Failed to send push notification to teachers:', err))
+      } catch (notifErr) {
+        logger.warn('Error queuing multi-teacher booking notification:', notifErr)
       }
 
       return res.json({

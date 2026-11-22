@@ -6,6 +6,8 @@ import { RoomManager } from './services/RoomManager.js'
 import { ServerTelemetrySampler } from './services/ServerTelemetrySampler.js'
 import { NativeSignalingServer } from './ws/NativeSignalingServer.js'
 import { AuthAdapter } from '../adapters/AuthAdapter.js'
+import { OnlineClassBooking } from '../../../core/models/OnlineClassBooking.js'
+import { OnlineClassService } from '../../../core/services/onlineClass.service.js'
 import { logger } from '../../../core/utils/logger.js'
 
 export class NativeClassroomController {
@@ -117,6 +119,50 @@ export class NativeClassroomController {
         (t: any) => (queryTicket && t.ticketCode === queryTicket) || t.ticketCode === roomId
       )
 
+      let isLocked = false
+      let unlocksAt: Date | undefined
+      let remainingSeconds = 0
+      let bookingData: any = null
+      const policy = await OnlineClassService.getSessionPolicy()
+
+      if (session?.bookingId) {
+        try {
+          const booking = await OnlineClassBooking.findById(session.bookingId)
+          if (booking) {
+            bookingData = {
+              scheduledAt: booking.scheduledAt,
+              durationMinutes: booking.durationMinutes,
+              teacherJoinedAt: booking.teacherJoinedAt,
+              effectiveStartAt: booking.effectiveStartAt,
+              endsAt: booking.endsAt,
+              status: booking.status,
+              teacherNoShow: booking.teacherNoShow,
+            }
+
+            const scheduledMs = new Date(booking.scheduledAt).getTime()
+            const now = Date.now()
+            const unlockBeforeMs = (policy.unlockBeforeMinutes ?? 5) * 60 * 1000
+            const unlockTime = scheduledMs - unlockBeforeMs
+
+            if (now < unlockTime) {
+              isLocked = true
+              unlocksAt = new Date(unlockTime)
+              remainingSeconds = Math.ceil((unlockTime - now) / 1000)
+            }
+
+            // Check if teacher exceeded grace period
+            const graceMs = (policy.teacherGraceMinutes ?? 30) * 60 * 1000
+            if (!booking.teacherJoinedAt && now > scheduledMs + graceMs) {
+              await OnlineClassService.handleTeacherNoShow(booking)
+              bookingData.status = 'cancelled'
+              bookingData.teacherNoShow = true
+            }
+          }
+        } catch (bErr) {
+          logger.warn('[NativeClassroom] Error fetching booking for room info:', bErr)
+        }
+      }
+
       return res.json({
         success: true,
         data: {
@@ -136,6 +182,18 @@ export class NativeClassroomController {
           ticketInvalid: Boolean(queryTicket && !matchedTicket),
           requiresAuthOrTicket: session.sourceType === 'online_class_booking',
           provider: 'internal',
+          isLocked,
+          unlocksAt,
+          remainingSeconds,
+          policy: {
+            unlockBeforeMinutes: policy.unlockBeforeMinutes,
+            teacherGraceMinutes: policy.teacherGraceMinutes,
+            extraMinutes: policy.extraMinutes,
+            endWarningMinutes: policy.endWarningMinutes,
+            studentRules: policy.studentRules,
+            teacherRules: policy.teacherRules,
+          },
+          booking: bookingData,
         },
       })
     } catch (err: any) {

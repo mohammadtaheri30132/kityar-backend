@@ -29,6 +29,13 @@ const optionalAuthOrTicket = async (req: any, res: any, next: any) => {
   return AuthAdapter.authenticate(req, res, next)
 }
 
+// Classroom Rules & Policy (Public / Auth)
+router.get('/rules', ClassroomController.getRules)
+
+// Admin Online Classes & Teacher No-Show Management
+router.get('/admin/online-classes', AuthAdapter.authenticate, ClassroomController.listAdminOnlineClasses)
+router.get('/admin/no-show-teachers', AuthAdapter.authenticate, ClassroomController.getNoShowTeachers)
+
 // Protected classroom session endpoints (all using plugNmeet as unified engine)
 router.get('/pricing', ClassroomController.getPricing)
 router.put('/pricing', ClassroomController.updatePricing)

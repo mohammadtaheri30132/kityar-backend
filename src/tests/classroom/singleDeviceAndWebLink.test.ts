@@ -8,6 +8,7 @@ import { RoomManager } from '../../modules/classroom/native/services/RoomManager
 import { ClassroomSession } from '../../modules/classroom/models/ClassroomSession.js'
 import { SessionSourceAdapter } from '../../modules/classroom/adapters/SessionSourceAdapter.js'
 import { OnlineClassBooking } from '../../core/models/OnlineClassBooking.js'
+import { ClassroomPricing } from '../../core/models/ClassroomPricing.js'
 import { User } from '../../core/models/User.js'
 import { PlugNmeetController } from '../../modules/classroom/plugnmeet/PlugNmeetController.js'
 
@@ -161,6 +162,14 @@ async function runTests() {
   const origUserFindById = User.findById
   const origBookingFindById = OnlineClassBooking.findById
   const origResolveSource = SessionSourceAdapter.resolveSource
+  const origPricingFindOne = ClassroomPricing.findOne
+  const origSessionUpdateOne = ClassroomSession.updateOne
+
+  ;(ClassroomPricing as any).findOne = () => ({
+    lean: async () => null,
+    then: (res: any, rej: any) => Promise.resolve(null).then(res, rej),
+  })
+  ;(ClassroomSession as any).updateOne = async () => ({})
 
   const matchSession = (query: any): any => {
     if (!query) return null
@@ -213,14 +222,29 @@ async function runTests() {
       then: (res: any, rej: any) => Promise.resolve(u).then(res, rej),
     }
   }
-  ;(OnlineClassBooking as any).findById = (id: any) => ({
-    select: () => ({
-      lean: async () =>
-        String(id) === freshBookingId.toString()
-          ? { bookingCode: 'OCB-FRESH', meeting: { roomName: freshBookingRoom }, capacity: 3 }
-          : null,
-    }),
-  })
+  ;(OnlineClassBooking as any).findById = (id: any) => {
+    const data: any =
+      String(id) === freshBookingId.toString()
+        ? {
+            bookingCode: 'OCB-FRESH',
+            meeting: { roomName: freshBookingRoom },
+            capacity: 3,
+            scheduledAt: new Date(Date.now() + 60000),
+            durationMinutes: 60,
+            save: async function () {
+              return this
+            },
+          }
+        : null
+    return {
+      select: () => ({
+        lean: async () => data,
+        then: (res: any, rej: any) => Promise.resolve(data).then(res, rej),
+      }),
+      lean: async () => data,
+      then: (res: any, rej: any) => Promise.resolve(data).then(res, rej),
+    }
+  }
   ;(SessionSourceAdapter as any).resolveSource = async (id: string) => {
     if (String(id) === freshBookingId.toString()) {
       return {
@@ -417,6 +441,9 @@ async function runTests() {
       } as any,
       rIntruder.res
     )
+    if (rIntruder.state.statusCode !== 403) {
+      console.log('DEBUG 7a intruder status:', rIntruder.state)
+    }
     assert.equal(rIntruder.state.statusCode, 403)
 
     // 7b: Student linkOnly -> issues personal ticket without markInProgress
@@ -430,6 +457,9 @@ async function runTests() {
       } as any,
       rStudent1Link.res
     )
+    if (rStudent1Link.state.statusCode !== 200) {
+      console.log('DEBUG 7b error:', rStudent1Link.state)
+    }
     assert.equal(rStudent1Link.state.statusCode, 200)
     const firstTicket = rStudent1Link.state.body.data.ticketCode
     assert.ok(firstTicket?.startsWith('inv-std-'))
@@ -482,6 +512,8 @@ async function runTests() {
     User.findById = origUserFindById
     OnlineClassBooking.findById = origBookingFindById
     SessionSourceAdapter.resolveSource = origResolveSource
+    ClassroomPricing.findOne = origPricingFindOne
+    ClassroomSession.updateOne = origSessionUpdateOne
   }
 }
 

@@ -234,6 +234,30 @@ export class ChatController {
         } catch (notifError) {
           logger.warn('Failed to dispatch chat notification:', notifError);
         }
+      } else if (!isTeacher && (classroom as any).teacher) {
+        // اطلاع‌رسانی به معلم در صورت ارسال پیام توسط دانش‌آموز
+        try {
+          NotificationService.send({
+            recipientType: 'teacher',
+            recipientUserId: (classroom as any).teacher,
+            senderId: user?._id || student?._id,
+            senderName,
+            senderRole: 'student',
+            title: `پیام جدید از دانش‌آموز «${senderName}»`,
+            body: `در کلاس «${classroom.name}»: ${messageType === 'VOICE' ? 'یک پیام صوتی 🎙' : messageType === 'IMAGE' ? 'یک تصویر 📷' : (caption || 'پیام جدید')}`,
+            type: 'CLASS_MESSAGE',
+            priority: 'normal',
+            targetId: classId.toString(),
+            data: {
+              classId: classId.toString(),
+              className: classroom.name,
+              messageId: (message._id as any).toString(),
+              messageType,
+            },
+          }).catch((err) => logger.warn('Error sending chat notification to teacher:', err));
+        } catch (notifErr) {
+          logger.warn('Failed to dispatch student chat notification to teacher:', notifErr);
+        }
       }
 
       return res.status(201).json({
@@ -537,6 +561,40 @@ export class ChatController {
       conversation.lastMessageAt = new Date();
       conversation.lastMessageSender = userId;
       await conversation.save();
+
+      // ارسال خودکار نوتیفیکیشن FCM و درون‌برنامه‌ای برای سایر اعضای این گفتگو
+      try {
+        const otherParticipantIds = (conversation.participants || [])
+          .map((p: any) => p.toString())
+          .filter((pId: string) => pId !== userId);
+
+        if (otherParticipantIds.length > 0) {
+          const senderName = user?.fullName || (user?.role === 'teacher' ? 'استاد' : 'دانش‌آموز');
+          const preview = previewText ? (previewText.length > 80 ? previewText.slice(0, 77) + '...' : previewText) : 'پیام جدید';
+          const notifRole = user?.role === 'teacher' ? 'teacher' : 'student';
+          const targetRecipientType = user?.role === 'teacher' ? 'student' : 'teacher';
+
+          NotificationService.send({
+            recipientType: targetRecipientType,
+            recipientUserIds: otherParticipantIds,
+            senderId: userId,
+            senderName,
+            senderRole: notifRole,
+            title: `پیام جدید از طرف ${senderName}`,
+            body: preview,
+            type: 'CLASS_MESSAGE',
+            priority: 'normal',
+            targetId: String(conversationId),
+            data: {
+              conversationId: String(conversationId),
+              messageId: (message._id as any).toString(),
+              type: 'conversation_message',
+            },
+          }).catch((err) => logger.warn('Failed to send conversation push notification:', err));
+        }
+      } catch (notifErr) {
+        logger.warn('Error queuing conversation message notification:', notifErr);
+      }
 
       return res.status(201).json({ success: true, data: message });
     } catch (error: any) {

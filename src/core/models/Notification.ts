@@ -1,6 +1,13 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
 
-export type NotificationType = 'HOMEWORK' | 'CLASS_MESSAGE' | 'ADMIN_ANNOUNCEMENT' | 'SYSTEM';
+export type NotificationType =
+  | 'HOMEWORK'
+  | 'CLASS_MESSAGE'
+  | 'ADMIN_ANNOUNCEMENT'
+  | 'ONLINE_CLASS'
+  | 'QUESTION'
+  | 'WALLET'
+  | 'SYSTEM';
 export type NotificationPriority = 'normal' | 'high' | 'urgent';
 export type RecipientType = 'teacher' | 'student' | 'all';
 
@@ -71,7 +78,7 @@ const notificationSchema = new Schema<INotification>(
     },
     type: {
       type: String,
-      enum: ['HOMEWORK', 'CLASS_MESSAGE', 'ADMIN_ANNOUNCEMENT', 'SYSTEM'],
+      enum: ['HOMEWORK', 'CLASS_MESSAGE', 'ADMIN_ANNOUNCEMENT', 'ONLINE_CLASS', 'QUESTION', 'WALLET', 'SYSTEM'],
       default: 'SYSTEM',
       index: true,
     },

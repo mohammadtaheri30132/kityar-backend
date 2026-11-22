@@ -8,6 +8,7 @@ import { TeacherMaterial } from '../../../core/models/TeacherMaterial.js'
 import { MaterialPurchase } from '../../../core/models/MaterialPurchase.js'
 import { OnlineClass } from '../../../core/models/OnlineClass.js'
 import { TeacherReview } from '../../../core/models/TeacherReview.js'
+import { CommunityPost } from '../../../core/models/CommunityPost.js'
 import { WalletService } from '../../../core/services/wallet.service.js'
 import { WalletTransaction } from '../../../core/models/WalletTransaction.js'
 
@@ -91,7 +92,7 @@ export class StudentMarketplaceController {
         return res.status(404).json({ success: false, message: 'پروفایل معلم یافت نشد' })
       }
 
-      const [materialsCount, reviews, onlineClasses] = await Promise.all([
+      const [materialsCount, reviews, onlineClasses, posts] = await Promise.all([
         TeacherMaterial.countDocuments({ teacherId: profile.user._id, status: 'published' }),
         TeacherReview.find({ teacherId: profile.user._id, status: 'approved' })
           .populate('studentId', 'fullName')
@@ -102,6 +103,13 @@ export class StudentMarketplaceController {
           status: 'scheduled',
           scheduledAt: { $gte: new Date() },
         }).limit(5),
+        CommunityPost.find({
+          author: profile.user._id,
+          status: 'active',
+        })
+          .sort({ createdAt: -1 })
+          .limit(30)
+          .lean(),
       ])
 
       return res.json({
@@ -112,12 +120,17 @@ export class StudentMarketplaceController {
           fullName: (profile.user as any)?.fullName || '',
           headline: profile.headline || '',
           bio: profile.bio || '',
-          avatar: profile.avatar || '',
+          avatar: profile.avatar || (profile.user as any)?.avatar || '',
+          coverImage: profile.coverImage || '',
           category: profile.category,
           position: profile.position,
           schools: profile.schools || [],
+          city: profile.city || '',
+          province: profile.province || '',
+          educationLevel: profile.educationLevel || '',
+          teachingSubjects: profile.teachingSubjects || [],
           experienceYears: profile.experienceYears || 0,
-          resume: profile.resume || { experiences: [], education: [], skills: [], certificates: [] },
+          resume: profile.resume || { experiences: [], education: [], skills: [], certificates: [], honors: [] },
           availabilityStatus: profile.availabilityStatus || 'offline',
           acceptingQuestions: profile.acceptingQuestions ?? true,
           questionFee: profile.questionFee || 0,
@@ -127,6 +140,7 @@ export class StudentMarketplaceController {
           materialsCount,
           reviews,
           onlineClasses,
+          posts: posts || [],
         },
       })
     } catch (error: any) {

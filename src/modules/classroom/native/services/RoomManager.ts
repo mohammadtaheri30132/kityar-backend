@@ -17,6 +17,7 @@ import {
 } from '../../models/ClassroomSession.js'
 import { ServerTelemetrySampler } from './ServerTelemetrySampler.js'
 import { ClassroomPricing } from '../../../../core/models/ClassroomPricing.js'
+import { OnlineClassBooking } from '../../../../core/models/OnlineClassBooking.js'
 import { logger } from '../../../../core/utils/logger.js'
 
 const RECORDINGS_DIR = path.join(process.cwd(), 'uploads', 'class-recordings')
@@ -30,6 +31,10 @@ function roleLabelFa(role?: string): string {
 export class RoomManager {
   private static rooms = new Map<string, INativeRoom>()
   private static completedRooms = new Map<string, INativeRoom>()
+
+  static getRooms(): Map<string, INativeRoom> {
+    return this.rooms
+  }
   private static roomAttendees = new Map<string, Map<string, ISeminarAttendeeRecord>>()
   private static retentionHoursCache = 48
   private static cleanupTimerStarted = false
@@ -102,6 +107,11 @@ export class RoomManager {
     let uiMode: ClassroomUiMode = 'online_class'
     let existingAttendees: ISeminarAttendeeRecord[] = []
     let existingPolls: INativeRoomPoll[] = []
+    let bookingScheduledAt: number | undefined
+    let bookingTeacherJoinedAt: number | undefined
+    let bookingEffectiveStartAt: number | undefined
+    let bookingEndsAt: number | undefined
+    let bookingDurationMinutes: number | undefined
     const isTestRoom = this.isTestRoomId(roomId)
 
     if (mongoose.connection.readyState === 1) {
@@ -114,6 +124,18 @@ export class RoomManager {
           uiMode = session.uiMode === 'seminar' ? 'seminar' : 'online_class'
           existingAttendees = Array.isArray(session.attendees) ? session.attendees : []
           existingPolls = Array.isArray((session as any).polls) ? (session as any).polls : []
+
+          if (session.bookingId) {
+            const bQuery: any = OnlineClassBooking.findById(session.bookingId)
+            const booking = typeof bQuery?.lean === 'function' ? await bQuery.lean() : await bQuery
+            if (booking) {
+              bookingScheduledAt = booking.scheduledAt ? new Date(booking.scheduledAt).getTime() : undefined
+              bookingTeacherJoinedAt = booking.teacherJoinedAt ? new Date(booking.teacherJoinedAt).getTime() : undefined
+              bookingEffectiveStartAt = booking.effectiveStartAt ? new Date(booking.effectiveStartAt).getTime() : undefined
+              bookingEndsAt = booking.endsAt ? new Date(booking.endsAt).getTime() : undefined
+              bookingDurationMinutes = booking.durationMinutes
+            }
+          }
         }
       } catch (err) {
         logger.error(`[RoomManager] Error querying db for room ${roomId}:`, err)
@@ -165,6 +187,11 @@ export class RoomManager {
       },
       createdAt: Date.now(),
       startedAt: Date.now(),
+      scheduledAt: bookingScheduledAt,
+      teacherJoinedAt: bookingTeacherJoinedAt,
+      effectiveStartAt: bookingEffectiveStartAt,
+      endsAt: bookingEndsAt,
+      durationMinutes: bookingDurationMinutes,
     }
 
     this.rooms.set(roomId, room)
@@ -1013,6 +1040,17 @@ export class RoomManager {
     } else if (room?.uiMode === 'seminar' && participant.role !== 'teacher' && participant.role !== 'admin' && !participant.isModerator) {
       participant.micState = 'blocked'
       participant.cameraEnabled = false
+    }
+    return participant
+  }
+
+  static setParticipantScreenSharePermission(roomId: string, peerId: string, allowed: boolean): INativeParticipant | null {
+    const room = this.rooms.get(roomId)
+    const participant = room?.participants.get(peerId)
+    if (!participant) return null
+    participant.canShareScreen = allowed
+    if (!allowed && participant.screenShareEnabled) {
+      participant.screenShareEnabled = false
     }
     return participant
   }

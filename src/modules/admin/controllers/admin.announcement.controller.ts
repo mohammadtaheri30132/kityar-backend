@@ -1,5 +1,6 @@
 import { Request, Response } from 'express'
 import { Announcement } from '../../../core/models/Announcement.js'
+import { NotificationService } from '../../../core/services/notificationService.js'
 import { logger } from '../../../core/utils/logger.js'
 
 export const getAnnouncements = async (req: Request, res: Response): Promise<void> => {
@@ -16,6 +17,30 @@ export const createAnnouncement = async (req: Request, res: Response): Promise<v
   try {
     const announcement = new Announcement(req.body)
     await announcement.save()
+
+    // ارسال خودکار نوتیفیکیشن همگانی و درون‌برنامه‌ای در صورت فعال بودن اطلاعیه
+    if (announcement.active) {
+      const priorityMap: Record<string, 'normal' | 'high' | 'urgent'> = {
+        low: 'normal',
+        normal: 'normal',
+        high: 'high',
+      };
+      NotificationService.send({
+        recipientType: 'all',
+        title: announcement.title,
+        body: announcement.shortMessage,
+        type: 'ADMIN_ANNOUNCEMENT',
+        priority: priorityMap[announcement.priority] || 'normal',
+        targetId: announcement._id.toString(),
+        data: {
+          announcementId: announcement._id.toString(),
+          type: 'ADMIN_ANNOUNCEMENT',
+        },
+      }).catch((notifErr) => {
+        logger.warn('Failed to dispatch announcement notification:', notifErr)
+      })
+    }
+
     res.status(201).json({ success: true, data: announcement })
   } catch (error) {
     logger.error('Error in createAnnouncement:', error)
